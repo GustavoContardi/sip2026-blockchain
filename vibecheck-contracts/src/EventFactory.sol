@@ -96,11 +96,11 @@ contract EventFactory is AccessControl {
     // -----------------------------------------------------------------
 
     /// @notice Parámetros del evento, agrupados para evitar stack too deep en `launchEvent`.
+    ///         El tope de reventa se define por tier, no a nivel de evento.
     struct EventParams {
         string name;               // Nombre del ERC-721 (ej. "Recital Cosquin 2026")
         string symbol;             // Símbolo del ERC-721 (ej. "CSQ26")
         uint256 eventDate;         // Timestamp UNIX del evento
-        uint16 maxResalePriceBps;  // Tope de reventa en bps (10000 = 100%)
         address venueSigner;       // Address que firma QRs en puerta
         string baseURI;            // Prefijo IPFS para metadata
     }
@@ -108,7 +108,7 @@ contract EventFactory is AccessControl {
     /**
      * @notice Lanza un nuevo evento. Solo productoras con ORGANIZER_ROLE.
      * @param p     Parámetros del evento (ver EventParams).
-     * @param tiers Array de tiers (nombre, precio USDC, supply).
+     * @param tiers Array de tiers (cada uno con nombre, precio USDC, supply y tope de reventa).
      */
     function launchEvent(EventParams calldata p, EventNFT.Tier[] calldata tiers)
         external
@@ -122,7 +122,6 @@ contract EventFactory is AccessControl {
             symbol: p.symbol,
             organizer: msg.sender,
             eventDate: p.eventDate,
-            maxResalePriceBps: p.maxResalePriceBps,
             venueSigner: p.venueSigner,
             baseURI: p.baseURI
         });

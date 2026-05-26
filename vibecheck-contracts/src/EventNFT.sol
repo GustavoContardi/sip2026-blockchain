@@ -36,12 +36,14 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant MARKET_ROLE = keccak256("MARKET_ROLE");
 
-    /// @notice Definición de un tier de entradas.
+    /// @notice Definición de un tier de entradas. El tope de reventa se define por tier
+    ///         para permitir políticas distintas entre VIP, General, Preventa, etc.
     struct Tier {
-        string name;        // "VIP", "General", "Platea"
-        uint256 priceUSDC;  // 6 decimales (USDC)
-        uint256 supply;     // máximo de tickets de este tier
-        uint256 sold;       // contador de vendidos
+        string name;                // "VIP", "Campo", "Platea", "Preventa"
+        uint256 priceUSDC;          // 6 decimales (USDC)
+        uint256 supply;             // máximo de tickets de este tier
+        uint256 sold;               // contador de vendidos
+        uint16 maxResalePriceBps;   // tope de reventa en bps (10000=100%, 12000=120%)
     }
 
     // -----------------------------------------------------------------
@@ -50,8 +52,7 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
 
     address public immutable organizer;
     address public immutable factory;
-    uint256 public immutable eventDate;        // timestamp UNIX del evento
-    uint16  public immutable maxResalePriceBps; // ej. 12000 = máx 120% del original
+    uint256 public immutable eventDate;         // timestamp UNIX del evento
 
     address public venueSigner;                 // firma off-chain los QRs en puerta
     string  private _baseTokenURI;
@@ -98,7 +99,6 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         string symbol;
         address organizer;
         uint256 eventDate;
-        uint16 maxResalePriceBps;
         address venueSigner;
         string baseURI;
     }
@@ -114,24 +114,28 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         if (p.organizer == address(0) || p.venueSigner == address(0)) revert ZeroAddress();
         if (p.eventDate <= block.timestamp) revert EventDateInPast();
         if (tiers_.length == 0) revert EmptyTiers();
-        // Tope mínimo razonable: 100% (sin reventa con ganancia). Máximo: 1000% como sanity.
-        if (p.maxResalePriceBps < 10_000 || p.maxResalePriceBps > 100_000) revert InvalidResaleCap();
 
         organizer = p.organizer;
         factory = msg.sender;
         eventDate = p.eventDate;
-        maxResalePriceBps = p.maxResalePriceBps;
         venueSigner = p.venueSigner;
         _baseTokenURI = p.baseURI;
 
         for (uint256 i = 0; i < tiers_.length; i++) {
             if (tiers_[i].supply == 0) revert InvalidTierSupply();
-            // sold debe arrancar en 0 sin importar lo que mande el factory
+            // Tope por tier: mínimo 100% (no se puede revender por menos del 100% — sí, este
+            // tope solo acota el techo; vender más barato siempre se puede). Máximo 1000% como
+            // sanity check para evitar valores accidentales sin sentido.
+            if (tiers_[i].maxResalePriceBps < 10_000 || tiers_[i].maxResalePriceBps > 100_000) {
+                revert InvalidResaleCap();
+            }
+            // `sold` se inicializa en 0 sin importar lo que mande el factory.
             tiers.push(Tier({
                 name: tiers_[i].name,
                 priceUSDC: tiers_[i].priceUSDC,
                 supply: tiers_[i].supply,
-                sold: 0
+                sold: 0,
+                maxResalePriceBps: tiers_[i].maxResalePriceBps
             }));
         }
 
@@ -231,8 +235,10 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     // -----------------------------------------------------------------
 
     /// @notice Precio máximo al que se puede revender este token (en USDC).
+    ///         El tope viene del tier al que pertenece el token.
     function maxResalePrice(uint256 tokenId) external view returns (uint256) {
-        return (originalPrice[tokenId] * maxResalePriceBps) / 10_000;
+        uint256 tierIdx = tokenTier[tokenId];
+        return (originalPrice[tokenId] * tiers[tierIdx].maxResalePriceBps) / 10_000;
     }
 
     /// @notice Cuántos tiers tiene este evento.

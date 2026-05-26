@@ -120,7 +120,7 @@ contract OfferingNFT is ReentrancyGuard, Ownable, Pausable {
         EventNFT evt = EventNFT(eventNFT);
         if (tierIdx >= evt.tiersLength()) revert TierOutOfRange();
 
-        (, uint256 priceUSDC, ,) = evt.tiers(tierIdx);
+        (, uint256 priceUSDC, , ,) = evt.tiers(tierIdx);
 
         uint256 fee = (priceUSDC * platformFeeBpsUSDC) / 10_000;
         uint256 netToOrg = priceUSDC - fee;
@@ -154,7 +154,7 @@ contract OfferingNFT is ReentrancyGuard, Ownable, Pausable {
         EventNFT evt = EventNFT(eventNFT);
         if (tierIdx >= evt.tiersLength()) revert TierOutOfRange();
 
-        (, uint256 priceUSDC, ,) = evt.tiers(tierIdx);
+        (, uint256 priceUSDC, , ,) = evt.tiers(tierIdx);
 
         // Cotización dinámica: ¿cuántos VBK necesito para obtener priceUSDC?
         address[] memory path = new address[](2);
@@ -187,7 +187,7 @@ contract OfferingNFT is ReentrancyGuard, Ownable, Pausable {
     ///         Útil para el frontend antes de pedir approve.
     function quoteVBK(address eventNFT, uint256 tierIdx) external view returns (uint256) {
         EventNFT evt = EventNFT(eventNFT);
-        (, uint256 priceUSDC, ,) = evt.tiers(tierIdx);
+        (, uint256 priceUSDC, , ,) = evt.tiers(tierIdx);
 
         address[] memory path = new address[](2);
         path[0] = address(usdc);
