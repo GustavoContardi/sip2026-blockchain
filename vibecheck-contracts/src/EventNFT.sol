@@ -119,7 +119,7 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         if (p.eventDate <= block.timestamp) revert EventDateInPast();
         if (tiers_.length == 0) revert EmptyTiers();
         // Tope reventa: mínimo 100% (10000), máximo 1000% (100000) como sanity check.
-        if (p.maxResalePriceBps < 10_000 || p.maxResalePriceBps > 100_000) revert InvalidResaleCap();
+        if (p.maxResalePriceBps < 10_000 || p.maxResalePriceBps > 50_000) revert InvalidResaleCap();
         // Royalty máximo 20% (2000 bps), patrón conservador de OpenZeppelin.
         if (p.royaltyBps > 2_000) revert InvalidRoyalty();
 
