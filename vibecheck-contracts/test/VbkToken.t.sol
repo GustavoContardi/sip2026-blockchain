@@ -45,10 +45,16 @@ contract VbkTokenTest is Test {
         uint256 expectedBurn = amount * 200 / 10_000; // 20 VBK
         uint256 expectedReceived = amount - expectedBurn;
 
+        // owner → alice: sin burn (owner es feeExempt)
         vm.prank(owner);
         vbk.transfer(alice, amount);
+        assertEq(vbk.balanceOf(alice), amount);
 
-        assertEq(vbk.balanceOf(alice), expectedReceived);
+        // alice → bob: con burn 2%
+        vm.prank(alice);
+        vbk.transfer(bob, amount);
+
+        assertEq(vbk.balanceOf(bob), expectedReceived);
         assertEq(vbk.totalSupply(), INITIAL_SUPPLY - expectedBurn);
     }
 
