@@ -36,14 +36,13 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant MARKET_ROLE = keccak256("MARKET_ROLE");
 
-    /// @notice Definición de un tier de entradas. El tope de reventa se define por tier
-    ///         para permitir políticas distintas entre VIP, General, Preventa, etc.
+    /// @notice Definición de un tier de entradas. Sin tope de reventa propio:
+    ///         el tope se define a nivel de evento.
     struct Tier {
         string name;                // "VIP", "Campo", "Platea", "Preventa"
         uint256 priceUSDC;          // 6 decimales (USDC)
         uint256 supply;             // máximo de tickets de este tier
         uint256 sold;               // contador de vendidos
-        uint16 maxResalePriceBps;   // tope de reventa en bps (10000=100%, 12000=120%)
     }
 
     // -----------------------------------------------------------------
@@ -53,6 +52,8 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     address public immutable organizer;
     address public immutable factory;
     uint256 public immutable eventDate;         // timestamp UNIX del evento
+    uint16  public immutable maxResalePriceBps; // tope reventa, ej. 12000 = 120%
+    uint16  public immutable royaltyBps;        // royalty al organizador, ej. 500 = 5%
 
     address public venueSigner;                 // firma off-chain los QRs en puerta
     string  private _baseTokenURI;
@@ -92,6 +93,7 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     error InvalidTierSupply();
     error EventDateInPast();
     error InvalidResaleCap();
+    error InvalidRoyalty();
 
     /// @notice Parámetros agrupados para evitar stack too deep en el constructor.
     struct InitParams {
@@ -99,6 +101,8 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         string symbol;
         address organizer;
         uint256 eventDate;
+        uint16 maxResalePriceBps;   // tope de reventa (bps). 10000=100%, 12000=120%, etc.
+        uint16 royaltyBps;          // royalty al organizador (bps). Tope: 2000 = 20%.
         address venueSigner;
         string baseURI;
     }
@@ -114,33 +118,32 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         if (p.organizer == address(0) || p.venueSigner == address(0)) revert ZeroAddress();
         if (p.eventDate <= block.timestamp) revert EventDateInPast();
         if (tiers_.length == 0) revert EmptyTiers();
+        // Tope reventa: mínimo 100% (10000), máximo 1000% (100000) como sanity check.
+        if (p.maxResalePriceBps < 10_000 || p.maxResalePriceBps > 100_000) revert InvalidResaleCap();
+        // Royalty máximo 20% (2000 bps), patrón conservador de OpenZeppelin.
+        if (p.royaltyBps > 2_000) revert InvalidRoyalty();
 
         organizer = p.organizer;
         factory = msg.sender;
         eventDate = p.eventDate;
+        maxResalePriceBps = p.maxResalePriceBps;
+        royaltyBps = p.royaltyBps;
         venueSigner = p.venueSigner;
         _baseTokenURI = p.baseURI;
 
         for (uint256 i = 0; i < tiers_.length; i++) {
             if (tiers_[i].supply == 0) revert InvalidTierSupply();
-            // Tope por tier: mínimo 100% (no se puede revender por menos del 100% — sí, este
-            // tope solo acota el techo; vender más barato siempre se puede). Máximo 1000% como
-            // sanity check para evitar valores accidentales sin sentido.
-            if (tiers_[i].maxResalePriceBps < 10_000 || tiers_[i].maxResalePriceBps > 100_000) {
-                revert InvalidResaleCap();
-            }
             // `sold` se inicializa en 0 sin importar lo que mande el factory.
             tiers.push(Tier({
                 name: tiers_[i].name,
                 priceUSDC: tiers_[i].priceUSDC,
                 supply: tiers_[i].supply,
-                sold: 0,
-                maxResalePriceBps: tiers_[i].maxResalePriceBps
+                sold: 0
             }));
         }
 
-        // Royalty 5% al organizador (EIP-2981)
-        _setDefaultRoyalty(p.organizer, 500);
+        // Royalty al organizador vía EIP-2981 (configurable por evento).
+        _setDefaultRoyalty(p.organizer, p.royaltyBps);
 
         // Factory (deployer) y organizer son admins de roles del NFT.
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -235,10 +238,8 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     // -----------------------------------------------------------------
 
     /// @notice Precio máximo al que se puede revender este token (en USDC).
-    ///         El tope viene del tier al que pertenece el token.
     function maxResalePrice(uint256 tokenId) external view returns (uint256) {
-        uint256 tierIdx = tokenTier[tokenId];
-        return (originalPrice[tokenId] * tiers[tierIdx].maxResalePriceBps) / 10_000;
+        return (originalPrice[tokenId] * maxResalePriceBps) / 10_000;
     }
 
     /// @notice Cuántos tiers tiene este evento.

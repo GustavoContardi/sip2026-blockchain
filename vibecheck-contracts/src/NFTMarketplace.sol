@@ -18,7 +18,7 @@ import {EventNFT} from "./EventNFT.sol";
  *         (los EventNFT bloquean transfers P2P salvo desde MARKET_ROLE).
  *
  *         Invariantes que enforza:
- *           - Precio listado ≤ tope de reventa del tier (originalPrice * tier.maxResalePriceBps).
+ *           - Precio listado ≤ tope de reventa del evento (originalPrice * maxResalePriceBps).
  *           - No se lista ni se vende post-redeem.
  *           - No se lista ni se vende post-eventDate.
  *           - Royalty 5% al organizador, vía EIP-2981 (royaltyInfo).
