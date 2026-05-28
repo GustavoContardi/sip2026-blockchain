@@ -1,0 +1,402 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/src/EventNFT.sol</title>
+  <link rel="stylesheet" type="text/css" href="../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../index.html">top level</a> - <a href="index.html">src/src</a> - EventNFT.sol<span style="font-size: 80%;"> (source / <a href="EventNFT.sol.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryHi">97.5&nbsp;%</td>
+            <td class="headerCovTableEntry">79</td>
+            <td class="headerCovTableEntry">77</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-05-28 18:11:25</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryHi">92.9&nbsp;%</td>
+            <td class="headerCovTableEntry">14</td>
+            <td class="headerCovTableEntry">13</td>
+          </tr>
+                  <tr><td><img src="../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : // SPDX-License-Identifier: MIT</span>
+<span id="L2"><span class="lineNum">       2</span>              : pragma solidity 0.8.24;</span>
+<span id="L3"><span class="lineNum">       3</span>              : </span>
+<span id="L4"><span class="lineNum">       4</span>              : import {ERC721} from &quot;@openzeppelin/contracts/token/ERC721/ERC721.sol&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import {ERC721Pausable} from &quot;@openzeppelin/contracts/token/ERC721/extensions/ERC721Pausable.sol&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import {ERC721Royalty} from &quot;@openzeppelin/contracts/token/ERC721/extensions/ERC721Royalty.sol&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : import {ERC2981} from &quot;@openzeppelin/contracts/token/common/ERC2981.sol&quot;;</span>
+<span id="L8"><span class="lineNum">       8</span>              : import {AccessControl} from &quot;@openzeppelin/contracts/access/AccessControl.sol&quot;;</span>
+<span id="L9"><span class="lineNum">       9</span>              : import {Ownable} from &quot;@openzeppelin/contracts/access/Ownable.sol&quot;;</span>
+<span id="L10"><span class="lineNum">      10</span>              : import {ECDSA} from &quot;@openzeppelin/contracts/utils/cryptography/ECDSA.sol&quot;;</span>
+<span id="L11"><span class="lineNum">      11</span>              : import {MessageHashUtils} from &quot;@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol&quot;;</span>
+<span id="L12"><span class="lineNum">      12</span>              : import {Strings} from &quot;@openzeppelin/contracts/utils/Strings.sol&quot;;</span>
+<span id="L13"><span class="lineNum">      13</span>              : </span>
+<span id="L14"><span class="lineNum">      14</span>              : /**</span>
+<span id="L15"><span class="lineNum">      15</span>              :  * @title EventNFT</span>
+<span id="L16"><span class="lineNum">      16</span>              :  * @notice ERC-721 de entradas para un evento específico.</span>
+<span id="L17"><span class="lineNum">      17</span>              :  *         Un EventNFT por evento (deployado por EventFactory).</span>
+<span id="L18"><span class="lineNum">      18</span>              :  *</span>
+<span id="L19"><span class="lineNum">      19</span>              :  *         Modelo:</span>
+<span id="L20"><span class="lineNum">      20</span>              :  *           - Tiers (VIP, General, Platea) con precio en USDC y supply fijo.</span>
+<span id="L21"><span class="lineNum">      21</span>              :  *           - Mint-on-sale: solo el OfferingNFT (MINTER_ROLE) puede acuñar.</span>
+<span id="L22"><span class="lineNum">      22</span>              :  *           - Royalty 5% al organizador vía EIP-2981 (lo respetan marketplaces externos</span>
+<span id="L23"><span class="lineNum">      23</span>              :  *             que implementen el estándar; el marketplace interno SIEMPRE lo enforza).</span>
+<span id="L24"><span class="lineNum">      24</span>              :  *           - Soulbound parcial: transferencias P2P bloqueadas; solo MARKET_ROLE</span>
+<span id="L25"><span class="lineNum">      25</span>              :  *             (NFTMarketplace) puede mover NFTs entre wallets. Mints y burns libres.</span>
+<span id="L26"><span class="lineNum">      26</span>              :  *           - Tope de reventa por evento: `maxResalePriceBps` * `originalPrice[tokenId]`.</span>
+<span id="L27"><span class="lineNum">      27</span>              :  *           - Check-in on-chain: `redeem()` con firma del `venueSigner`. Marca el</span>
+<span id="L28"><span class="lineNum">      28</span>              :  *             tokenId como usado, bloquea futuras transferencias, y dispara mutación</span>
+<span id="L29"><span class="lineNum">      29</span>              :  *             de `tokenURI` (entrada → coleccionable).</span>
+<span id="L30"><span class="lineNum">      30</span>              :  */</span>
+<span id="L31"><span class="lineNum">      31</span>              : contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownable {</span>
+<span id="L32"><span class="lineNum">      32</span>              :     using Strings for uint256;</span>
+<span id="L33"><span class="lineNum">      33</span>              :     using ECDSA for bytes32;</span>
+<span id="L34"><span class="lineNum">      34</span>              :     using MessageHashUtils for bytes32;</span>
+<span id="L35"><span class="lineNum">      35</span>              : </span>
+<span id="L36"><span class="lineNum">      36</span>              :     bytes32 public constant MINTER_ROLE = keccak256(&quot;MINTER_ROLE&quot;);</span>
+<span id="L37"><span class="lineNum">      37</span>              :     bytes32 public constant MARKET_ROLE = keccak256(&quot;MARKET_ROLE&quot;);</span>
+<span id="L38"><span class="lineNum">      38</span>              : </span>
+<span id="L39"><span class="lineNum">      39</span>              :     /// @notice Definición de un tier de entradas. Sin tope de reventa propio:</span>
+<span id="L40"><span class="lineNum">      40</span>              :     ///         el tope se define a nivel de evento.</span>
+<span id="L41"><span class="lineNum">      41</span>              :     struct Tier {</span>
+<span id="L42"><span class="lineNum">      42</span>              :         string name;                // &quot;VIP&quot;, &quot;Campo&quot;, &quot;Platea&quot;, &quot;Preventa&quot;</span>
+<span id="L43"><span class="lineNum">      43</span>              :         uint256 priceUSDC;          // 6 decimales (USDC)</span>
+<span id="L44"><span class="lineNum">      44</span>              :         uint256 supply;             // máximo de tickets de este tier</span>
+<span id="L45"><span class="lineNum">      45</span>              :         uint256 sold;               // contador de vendidos</span>
+<span id="L46"><span class="lineNum">      46</span>              :     }</span>
+<span id="L47"><span class="lineNum">      47</span>              : </span>
+<span id="L48"><span class="lineNum">      48</span>              :     // -----------------------------------------------------------------</span>
+<span id="L49"><span class="lineNum">      49</span>              :     // Estado del evento</span>
+<span id="L50"><span class="lineNum">      50</span>              :     // -----------------------------------------------------------------</span>
+<span id="L51"><span class="lineNum">      51</span>              : </span>
+<span id="L52"><span class="lineNum">      52</span>              :     address public immutable organizer;</span>
+<span id="L53"><span class="lineNum">      53</span>              :     address public immutable factory;</span>
+<span id="L54"><span class="lineNum">      54</span>              :     uint256 public immutable eventDate;         // timestamp UNIX del evento</span>
+<span id="L55"><span class="lineNum">      55</span>              :     uint16  public immutable maxResalePriceBps; // tope reventa, ej. 12000 = 120%</span>
+<span id="L56"><span class="lineNum">      56</span>              :     uint16  public immutable royaltyBps;        // royalty al organizador, ej. 500 = 5%</span>
+<span id="L57"><span class="lineNum">      57</span>              : </span>
+<span id="L58"><span class="lineNum">      58</span>              :     address public venueSigner;                 // firma off-chain los QRs en puerta</span>
+<span id="L59"><span class="lineNum">      59</span>              :     string  private _baseTokenURI;</span>
+<span id="L60"><span class="lineNum">      60</span>              : </span>
+<span id="L61"><span class="lineNum">      61</span>              :     Tier[] public tiers;</span>
+<span id="L62"><span class="lineNum">      62</span>              : </span>
+<span id="L63"><span class="lineNum">      63</span>              :     uint256 private _nextId;</span>
+<span id="L64"><span class="lineNum">      64</span>              : </span>
+<span id="L65"><span class="lineNum">      65</span>              :     /// @notice Tier al que pertenece cada token.</span>
+<span id="L66"><span class="lineNum">      66</span>              :     mapping(uint256 =&gt; uint256) public tokenTier;</span>
+<span id="L67"><span class="lineNum">      67</span>              :     /// @notice Precio nominal en USDC pagado en la venta primaria.</span>
+<span id="L68"><span class="lineNum">      68</span>              :     ///         Sirve como referencia para el tope de reventa.</span>
+<span id="L69"><span class="lineNum">      69</span>              :     mapping(uint256 =&gt; uint256) public originalPrice;</span>
+<span id="L70"><span class="lineNum">      70</span>              :     /// @notice Si el token ya fue usado para entrar al evento.</span>
+<span id="L71"><span class="lineNum">      71</span>              :     mapping(uint256 =&gt; bool) public redeemed;</span>
+<span id="L72"><span class="lineNum">      72</span>              :     /// @notice Si el holder asistió (controla la mutación del tokenURI).</span>
+<span id="L73"><span class="lineNum">      73</span>              :     mapping(uint256 =&gt; bool) public attended;</span>
+<span id="L74"><span class="lineNum">      74</span>              : </span>
+<span id="L75"><span class="lineNum">      75</span>              :     // -----------------------------------------------------------------</span>
+<span id="L76"><span class="lineNum">      76</span>              :     // Eventos y errores</span>
+<span id="L77"><span class="lineNum">      77</span>              :     // -----------------------------------------------------------------</span>
+<span id="L78"><span class="lineNum">      78</span>              : </span>
+<span id="L79"><span class="lineNum">      79</span>              :     event TicketSold(address indexed buyer, uint256 indexed tokenId, uint256 indexed tierIdx, uint256 priceUSDC);</span>
+<span id="L80"><span class="lineNum">      80</span>              :     event Redeemed(uint256 indexed tokenId, address indexed by);</span>
+<span id="L81"><span class="lineNum">      81</span>              :     event VenueSignerUpdated(address indexed previous, address indexed next);</span>
+<span id="L82"><span class="lineNum">      82</span>              :     event BaseURIUpdated(string newBaseURI);</span>
+<span id="L83"><span class="lineNum">      83</span>              : </span>
+<span id="L84"><span class="lineNum">      84</span>              :     error TierOutOfRange();</span>
+<span id="L85"><span class="lineNum">      85</span>              :     error TierSoldOut();</span>
+<span id="L86"><span class="lineNum">      86</span>              :     error EventOver();</span>
+<span id="L87"><span class="lineNum">      87</span>              :     error AlreadyRedeemed();</span>
+<span id="L88"><span class="lineNum">      88</span>              :     error InvalidSignature();</span>
+<span id="L89"><span class="lineNum">      89</span>              :     error CheckInWindowClosed();</span>
+<span id="L90"><span class="lineNum">      90</span>              :     error TransferNotAllowed();</span>
+<span id="L91"><span class="lineNum">      91</span>              :     error ZeroAddress();</span>
+<span id="L92"><span class="lineNum">      92</span>              :     error EmptyTiers();</span>
+<span id="L93"><span class="lineNum">      93</span>              :     error InvalidTierSupply();</span>
+<span id="L94"><span class="lineNum">      94</span>              :     error EventDateInPast();</span>
+<span id="L95"><span class="lineNum">      95</span>              :     error InvalidResaleCap();</span>
+<span id="L96"><span class="lineNum">      96</span>              :     error InvalidRoyalty();</span>
+<span id="L97"><span class="lineNum">      97</span>              : </span>
+<span id="L98"><span class="lineNum">      98</span>              :     /// @notice Parámetros agrupados para evitar stack too deep en el constructor.</span>
+<span id="L99"><span class="lineNum">      99</span>              :     struct InitParams {</span>
+<span id="L100"><span class="lineNum">     100</span>              :         string name;</span>
+<span id="L101"><span class="lineNum">     101</span>              :         string symbol;</span>
+<span id="L102"><span class="lineNum">     102</span>              :         address organizer;</span>
+<span id="L103"><span class="lineNum">     103</span>              :         uint256 eventDate;</span>
+<span id="L104"><span class="lineNum">     104</span>              :         uint16 maxResalePriceBps;   // tope de reventa (bps). 10000=100%, 12000=120%, etc.</span>
+<span id="L105"><span class="lineNum">     105</span>              :         uint16 royaltyBps;          // royalty al organizador (bps). Tope: 2000 = 20%.</span>
+<span id="L106"><span class="lineNum">     106</span>              :         address venueSigner;</span>
+<span id="L107"><span class="lineNum">     107</span>              :         string baseURI;</span>
+<span id="L108"><span class="lineNum">     108</span>              :     }</span>
+<span id="L109"><span class="lineNum">     109</span>              : </span>
+<span id="L110"><span class="lineNum">     110</span>              :     // -----------------------------------------------------------------</span>
+<span id="L111"><span class="lineNum">     111</span>              :     // Constructor</span>
+<span id="L112"><span class="lineNum">     112</span>              :     // -----------------------------------------------------------------</span>
+<span id="L113"><span class="lineNum">     113</span>              : </span>
+<span id="L114"><span class="lineNum">     114</span> <span class="tlaGNC tlaBgGNC">          79 :     constructor(InitParams memory p, Tier[] memory tiers_)</span></span>
+<span id="L115"><span class="lineNum">     115</span>              :         ERC721(p.name, p.symbol)</span>
+<span id="L116"><span class="lineNum">     116</span>              :         Ownable(p.organizer)</span>
+<span id="L117"><span class="lineNum">     117</span>              :     {</span>
+<span id="L118"><span class="lineNum">     118</span> <span class="tlaGNC">          79 :         if (p.organizer == address(0) || p.venueSigner == address(0)) revert ZeroAddress();</span></span>
+<span id="L119"><span class="lineNum">     119</span> <span class="tlaGNC">          79 :         if (p.eventDate &lt;= block.timestamp) revert EventDateInPast();</span></span>
+<span id="L120"><span class="lineNum">     120</span> <span class="tlaGNC">          78 :         if (tiers_.length == 0) revert EmptyTiers();</span></span>
+<span id="L121"><span class="lineNum">     121</span>              :         // Tope reventa: mínimo 100% (10000), máximo 1000% (100000) como sanity check.</span>
+<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">          78 :         if (p.maxResalePriceBps &lt; 10_000 || p.maxResalePriceBps &gt; 50_000) revert InvalidResaleCap();</span></span>
+<span id="L123"><span class="lineNum">     123</span>              :         // Royalty máximo 20% (2000 bps), patrón conservador de OpenZeppelin.</span>
+<span id="L124"><span class="lineNum">     124</span> <span class="tlaGNC">          77 :         if (p.royaltyBps &gt; 2_000) revert InvalidRoyalty();</span></span>
+<span id="L125"><span class="lineNum">     125</span>              : </span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          76 :         organizer = p.organizer;</span></span>
+<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          76 :         factory = msg.sender;</span></span>
+<span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">          76 :         eventDate = p.eventDate;</span></span>
+<span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">          76 :         maxResalePriceBps = p.maxResalePriceBps;</span></span>
+<span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">          76 :         royaltyBps = p.royaltyBps;</span></span>
+<span id="L131"><span class="lineNum">     131</span> <span class="tlaGNC">          76 :         venueSigner = p.venueSigner;</span></span>
+<span id="L132"><span class="lineNum">     132</span> <span class="tlaGNC">          76 :         _baseTokenURI = p.baseURI;</span></span>
+<span id="L133"><span class="lineNum">     133</span>              : </span>
+<span id="L134"><span class="lineNum">     134</span> <span class="tlaGNC">          76 :         for (uint256 i = 0; i &lt; tiers_.length; i++) {</span></span>
+<span id="L135"><span class="lineNum">     135</span> <span class="tlaGNC">         105 :             if (tiers_[i].supply == 0) revert InvalidTierSupply();</span></span>
+<span id="L136"><span class="lineNum">     136</span>              :             // `sold` se inicializa en 0 sin importar lo que mande el factory.</span>
+<span id="L137"><span class="lineNum">     137</span> <span class="tlaGNC">         105 :             tiers.push(Tier({</span></span>
+<span id="L138"><span class="lineNum">     138</span>              :                 name: tiers_[i].name,</span>
+<span id="L139"><span class="lineNum">     139</span>              :                 priceUSDC: tiers_[i].priceUSDC,</span>
+<span id="L140"><span class="lineNum">     140</span>              :                 supply: tiers_[i].supply,</span>
+<span id="L141"><span class="lineNum">     141</span>              :                 sold: 0</span>
+<span id="L142"><span class="lineNum">     142</span>              :             }));</span>
+<span id="L143"><span class="lineNum">     143</span>              :         }</span>
+<span id="L144"><span class="lineNum">     144</span>              : </span>
+<span id="L145"><span class="lineNum">     145</span>              :         // Royalty al organizador vía EIP-2981 (configurable por evento).</span>
+<span id="L146"><span class="lineNum">     146</span> <span class="tlaGNC">          76 :         _setDefaultRoyalty(p.organizer, p.royaltyBps);</span></span>
+<span id="L147"><span class="lineNum">     147</span>              : </span>
+<span id="L148"><span class="lineNum">     148</span>              :         // Factory (deployer) y organizer son admins de roles del NFT.</span>
+<span id="L149"><span class="lineNum">     149</span> <span class="tlaGNC">          76 :         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);</span></span>
+<span id="L150"><span class="lineNum">     150</span> <span class="tlaGNC">          76 :         _grantRole(DEFAULT_ADMIN_ROLE, p.organizer);</span></span>
+<span id="L151"><span class="lineNum">     151</span>              : </span>
+<span id="L152"><span class="lineNum">     152</span> <span class="tlaGNC">          76 :         emit VenueSignerUpdated(address(0), p.venueSigner);</span></span>
+<span id="L153"><span class="lineNum">     153</span>              :     }</span>
+<span id="L154"><span class="lineNum">     154</span>              : </span>
+<span id="L155"><span class="lineNum">     155</span>              :     // -----------------------------------------------------------------</span>
+<span id="L156"><span class="lineNum">     156</span>              :     // Admin (organizador)</span>
+<span id="L157"><span class="lineNum">     157</span>              :     // -----------------------------------------------------------------</span>
+<span id="L158"><span class="lineNum">     158</span>              : </span>
+<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">           4 :     function setVenueSigner(address newSigner) external onlyOwner {</span></span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">           3 :         if (newSigner == address(0)) revert ZeroAddress();</span></span>
+<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">           2 :         emit VenueSignerUpdated(venueSigner, newSigner);</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">           2 :         venueSigner = newSigner;</span></span>
+<span id="L163"><span class="lineNum">     163</span>              :     }</span>
+<span id="L164"><span class="lineNum">     164</span>              : </span>
+<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">           3 :     function setBaseURI(string calldata newBase) external onlyOwner {</span></span>
+<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">           2 :         _baseTokenURI = newBase;</span></span>
+<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">           2 :         emit BaseURIUpdated(newBase);</span></span>
+<span id="L168"><span class="lineNum">     168</span>              :     }</span>
+<span id="L169"><span class="lineNum">     169</span>              : </span>
+<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">           3 :     function pause() external onlyOwner {</span></span>
+<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">           2 :         _pause();</span></span>
+<span id="L172"><span class="lineNum">     172</span>              :     }</span>
+<span id="L173"><span class="lineNum">     173</span>              : </span>
+<span id="L174"><span class="lineNum">     174</span> <span class="tlaGNC">           1 :     function unpause() external onlyOwner {</span></span>
+<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC">           1 :         _unpause();</span></span>
+<span id="L176"><span class="lineNum">     176</span>              :     }</span>
+<span id="L177"><span class="lineNum">     177</span>              : </span>
+<span id="L178"><span class="lineNum">     178</span>              :     // -----------------------------------------------------------------</span>
+<span id="L179"><span class="lineNum">     179</span>              :     // Minting (solo OfferingNFT)</span>
+<span id="L180"><span class="lineNum">     180</span>              :     // -----------------------------------------------------------------</span>
+<span id="L181"><span class="lineNum">     181</span>              : </span>
+<span id="L182"><span class="lineNum">     182</span>              :     /// @notice Acuña un ticket en la venta primaria. Solo el OfferingNFT.</span>
+<span id="L183"><span class="lineNum">     183</span>              :     /// @param to       comprador</span>
+<span id="L184"><span class="lineNum">     184</span>              :     /// @param tierIdx  índice del tier elegido</span>
+<span id="L185"><span class="lineNum">     185</span>              :     /// @param paidUSDC precio nominal en USDC del tier (referencia para tope de reventa)</span>
+<span id="L186"><span class="lineNum">     186</span> <span class="tlaGNC">         345 :     function mintTicket(address to, uint256 tierIdx, uint256 paidUSDC)</span></span>
+<span id="L187"><span class="lineNum">     187</span>              :         external</span>
+<span id="L188"><span class="lineNum">     188</span>              :         onlyRole(MINTER_ROLE)</span>
+<span id="L189"><span class="lineNum">     189</span>              :         whenNotPaused</span>
+<span id="L190"><span class="lineNum">     190</span>              :         returns (uint256 tokenId)</span>
+<span id="L191"><span class="lineNum">     191</span>              :     {</span>
+<span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">         343 :         if (block.timestamp &gt;= eventDate) revert EventOver();</span></span>
+<span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC">         342 :         if (tierIdx &gt;= tiers.length) revert TierOutOfRange();</span></span>
+<span id="L194"><span class="lineNum">     194</span>              : </span>
+<span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">         341 :         Tier storage t = tiers[tierIdx];</span></span>
+<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">         341 :         if (t.sold &gt;= t.supply) revert TierSoldOut();</span></span>
+<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">         340 :         t.sold += 1;</span></span>
+<span id="L198"><span class="lineNum">     198</span>              : </span>
+<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">         340 :         tokenId = ++_nextId;</span></span>
+<span id="L200"><span class="lineNum">     200</span> <span class="tlaGNC">         340 :         tokenTier[tokenId] = tierIdx;</span></span>
+<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC">         340 :         originalPrice[tokenId] = paidUSDC;</span></span>
+<span id="L202"><span class="lineNum">     202</span>              : </span>
+<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">         340 :         _mint(to, tokenId);</span></span>
+<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">         340 :         emit TicketSold(to, tokenId, tierIdx, paidUSDC);</span></span>
+<span id="L205"><span class="lineNum">     205</span>              :     }</span>
+<span id="L206"><span class="lineNum">     206</span>              : </span>
+<span id="L207"><span class="lineNum">     207</span>              :     // -----------------------------------------------------------------</span>
+<span id="L208"><span class="lineNum">     208</span>              :     // Check-in (redeem con firma del venue)</span>
+<span id="L209"><span class="lineNum">     209</span>              :     // -----------------------------------------------------------------</span>
+<span id="L210"><span class="lineNum">     210</span>              : </span>
+<span id="L211"><span class="lineNum">     211</span>              :     /**</span>
+<span id="L212"><span class="lineNum">     212</span>              :      * @notice Marca un ticket como usado. Requiere firma del venueSigner.</span>
+<span id="L213"><span class="lineNum">     213</span>              :      * @dev El mensaje firmado es `keccak256(abi.encode(address(this), tokenId, chainid))`.</span>
+<span id="L214"><span class="lineNum">     214</span>              :      *      El venue firma off-chain, el fan presenta tokenId + signature.</span>
+<span id="L215"><span class="lineNum">     215</span>              :      *      Ventana de check-in: desde 1 día antes hasta 1 día después del evento.</span>
+<span id="L216"><span class="lineNum">     216</span>              :      */</span>
+<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">          11 :     function redeem(uint256 tokenId, bytes calldata signature) external {</span></span>
+<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">          11 :         if (ownerOf(tokenId) != msg.sender) revert TransferNotAllowed();</span></span>
+<span id="L219"><span class="lineNum">     219</span> <span class="tlaGNC">           1 :         if (redeemed[tokenId]) revert AlreadyRedeemed();</span></span>
+<span id="L220"><span class="lineNum">     220</span>              : </span>
+<span id="L221"><span class="lineNum">     221</span>              :         // Ventana: [eventDate - 1 day, eventDate + 1 day]</span>
+<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">           9 :         if (block.timestamp &lt; eventDate - 1 days || block.timestamp &gt; eventDate + 1 days) {</span></span>
+<span id="L223"><span class="lineNum">     223</span> <span class="tlaGNC">           1 :             revert CheckInWindowClosed();</span></span>
+<span id="L224"><span class="lineNum">     224</span>              :         }</span>
+<span id="L225"><span class="lineNum">     225</span>              : </span>
+<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">           8 :         bytes32 digest = keccak256(abi.encode(address(this), tokenId, block.chainid))</span></span>
+<span id="L227"><span class="lineNum">     227</span>              :             .toEthSignedMessageHash();</span>
+<span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">           8 :         address recovered = digest.recover(signature);</span></span>
+<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">           8 :         if (recovered != venueSigner) revert InvalidSignature();</span></span>
+<span id="L230"><span class="lineNum">     230</span>              : </span>
+<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">           7 :         redeemed[tokenId] = true;</span></span>
+<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">           7 :         attended[tokenId] = true;</span></span>
+<span id="L233"><span class="lineNum">     233</span> <span class="tlaGNC">           7 :         emit Redeemed(tokenId, msg.sender);</span></span>
+<span id="L234"><span class="lineNum">     234</span>              :     }</span>
+<span id="L235"><span class="lineNum">     235</span>              : </span>
+<span id="L236"><span class="lineNum">     236</span>              :     // -----------------------------------------------------------------</span>
+<span id="L237"><span class="lineNum">     237</span>              :     // Helpers de lectura</span>
+<span id="L238"><span class="lineNum">     238</span>              :     // -----------------------------------------------------------------</span>
+<span id="L239"><span class="lineNum">     239</span>              : </span>
+<span id="L240"><span class="lineNum">     240</span>              :     /// @notice Precio máximo al que se puede revender este token (en USDC).</span>
+<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">         779 :     function maxResalePrice(uint256 tokenId) external view returns (uint256) {</span></span>
+<span id="L242"><span class="lineNum">     242</span> <span class="tlaGNC">         779 :         return (originalPrice[tokenId] * maxResalePriceBps) / 10_000;</span></span>
+<span id="L243"><span class="lineNum">     243</span>              :     }</span>
+<span id="L244"><span class="lineNum">     244</span>              : </span>
+<span id="L245"><span class="lineNum">     245</span>              :     /// @notice Cuántos tiers tiene este evento.</span>
+<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">         276 :     function tiersLength() external view returns (uint256) {</span></span>
+<span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">         276 :         return tiers.length;</span></span>
+<span id="L248"><span class="lineNum">     248</span>              :     }</span>
+<span id="L249"><span class="lineNum">     249</span>              : </span>
+<span id="L250"><span class="lineNum">     250</span>              :     /// @notice Total acuñado hasta ahora.</span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">           1 :     function totalMinted() external view returns (uint256) {</span></span>
+<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">           1 :         return _nextId;</span></span>
+<span id="L253"><span class="lineNum">     253</span>              :     }</span>
+<span id="L254"><span class="lineNum">     254</span>              : </span>
+<span id="L255"><span class="lineNum">     255</span>              :     // -----------------------------------------------------------------</span>
+<span id="L256"><span class="lineNum">     256</span>              :     // tokenURI dinámico (entrada → coleccionable)</span>
+<span id="L257"><span class="lineNum">     257</span>              :     // -----------------------------------------------------------------</span>
+<span id="L258"><span class="lineNum">     258</span>              : </span>
+<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">           4 :     function tokenURI(uint256 tokenId) public view override returns (string memory) {</span></span>
+<span id="L260"><span class="lineNum">     260</span> <span class="tlaGNC">           4 :         _requireOwned(tokenId);</span></span>
+<span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">           4 :         string memory base = _baseTokenURI;</span></span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">           4 :         if (bytes(base).length == 0) return &quot;&quot;;</span></span>
+<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">           3 :         string memory kind = attended[tokenId] ? &quot;collectible/&quot; : &quot;ticket/&quot;;</span></span>
+<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">           3 :         return string.concat(base, kind, tokenId.toString());</span></span>
+<span id="L265"><span class="lineNum">     265</span>              :     }</span>
+<span id="L266"><span class="lineNum">     266</span>              : </span>
+<span id="L267"><span class="lineNum">     267</span> <span class="tlaUNC tlaBgUNC">           0 :     function _baseURI() internal view override returns (string memory) {</span></span>
+<span id="L268"><span class="lineNum">     268</span> <span class="tlaUNC">           0 :         return _baseTokenURI;</span></span>
+<span id="L269"><span class="lineNum">     269</span>              :     }</span>
+<span id="L270"><span class="lineNum">     270</span>              : </span>
+<span id="L271"><span class="lineNum">     271</span>              :     // -----------------------------------------------------------------</span>
+<span id="L272"><span class="lineNum">     272</span>              :     // Soulbound parcial: transferencias controladas</span>
+<span id="L273"><span class="lineNum">     273</span>              :     // -----------------------------------------------------------------</span>
+<span id="L274"><span class="lineNum">     274</span>              : </span>
+<span id="L275"><span class="lineNum">     275</span>              :     /**</span>
+<span id="L276"><span class="lineNum">     276</span>              :      * @dev Reglas de transferencia:</span>
+<span id="L277"><span class="lineNum">     277</span>              :      *      - Mint (from == 0) y burn (to == 0): permitidos.</span>
+<span id="L278"><span class="lineNum">     278</span>              :      *      - Post-redeem: nadie puede transferir (entrada usada).</span>
+<span id="L279"><span class="lineNum">     279</span>              :      *      - Post-eventDate: nadie puede transferir (evento pasó).</span>
+<span id="L280"><span class="lineNum">     280</span>              :      *      - Pre-evento: solo el organizador o quien tenga MARKET_ROLE puede mover.</span>
+<span id="L281"><span class="lineNum">     281</span>              :      *        Esto fuerza que toda reventa pase por el NFTMarketplace, donde se</span>
+<span id="L282"><span class="lineNum">     282</span>              :      *        cobra royalty y se enforza el tope de precio.</span>
+<span id="L283"><span class="lineNum">     283</span>              :      *</span>
+<span id="L284"><span class="lineNum">     284</span>              :      *      `auth` es el operator de la transferencia. Lo provee OZ v5:</span>
+<span id="L285"><span class="lineNum">     285</span>              :      *      - Si el owner llama directamente `transferFrom`, `auth == owner`.</span>
+<span id="L286"><span class="lineNum">     286</span>              :      *      - Si llama un approved/operator, `auth == ese operator`.</span>
+<span id="L287"><span class="lineNum">     287</span>              :      *      Por eso, un fan que llame `transferFrom` directo a otra wallet falla</span>
+<span id="L288"><span class="lineNum">     288</span>              :      *      (porque su address no tiene MARKET_ROLE), pero el marketplace pasa.</span>
+<span id="L289"><span class="lineNum">     289</span>              :      */</span>
+<span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC tlaBgGNC">         345 :     function _update(address to, uint256 tokenId, address auth)</span></span>
+<span id="L291"><span class="lineNum">     291</span>              :         internal</span>
+<span id="L292"><span class="lineNum">     292</span>              :         override(ERC721, ERC721Pausable)</span>
+<span id="L293"><span class="lineNum">     293</span>              :         returns (address)</span>
+<span id="L294"><span class="lineNum">     294</span>              :     {</span>
+<span id="L295"><span class="lineNum">     295</span> <span class="tlaGNC">         345 :         address from = _ownerOf(tokenId);</span></span>
+<span id="L296"><span class="lineNum">     296</span>              : </span>
+<span id="L297"><span class="lineNum">     297</span>              :         // Transferencia real (no mint ni burn).</span>
+<span id="L298"><span class="lineNum">     298</span> <span class="tlaGNC">         345 :         if (from != address(0) &amp;&amp; to != address(0)) {</span></span>
+<span id="L299"><span class="lineNum">     299</span> <span class="tlaGNC">           1 :             if (redeemed[tokenId]) revert TransferNotAllowed();</span></span>
+<span id="L300"><span class="lineNum">     300</span> <span class="tlaGNC">           4 :             if (block.timestamp &gt;= eventDate) revert TransferNotAllowed();</span></span>
+<span id="L301"><span class="lineNum">     301</span>              : </span>
+<span id="L302"><span class="lineNum">     302</span>              :             // Solo el organizador o un operator con MARKET_ROLE puede transferir.</span>
+<span id="L303"><span class="lineNum">     303</span> <span class="tlaGNC">           3 :             bool authorized =</span></span>
+<span id="L304"><span class="lineNum">     304</span> <span class="tlaGNC">           3 :                 auth == organizer ||</span></span>
+<span id="L305"><span class="lineNum">     305</span> <span class="tlaGNC">           3 :                 hasRole(MARKET_ROLE, auth) ||</span></span>
+<span id="L306"><span class="lineNum">     306</span>              :                 (auth == address(0) &amp;&amp; (from == organizer || hasRole(MARKET_ROLE, from)));</span>
+<span id="L307"><span class="lineNum">     307</span>              : </span>
+<span id="L308"><span class="lineNum">     308</span> <span class="tlaGNC">           3 :             if (!authorized) revert TransferNotAllowed();</span></span>
+<span id="L309"><span class="lineNum">     309</span>              :         }</span>
+<span id="L310"><span class="lineNum">     310</span>              : </span>
+<span id="L311"><span class="lineNum">     311</span> <span class="tlaGNC">         342 :         return super._update(to, tokenId, auth);</span></span>
+<span id="L312"><span class="lineNum">     312</span>              :     }</span>
+<span id="L313"><span class="lineNum">     313</span>              : </span>
+<span id="L314"><span class="lineNum">     314</span>              :     // -----------------------------------------------------------------</span>
+<span id="L315"><span class="lineNum">     315</span>              :     // Herencia múltiple: supportsInterface</span>
+<span id="L316"><span class="lineNum">     316</span>              :     // -----------------------------------------------------------------</span>
+<span id="L317"><span class="lineNum">     317</span>              : </span>
+<span id="L318"><span class="lineNum">     318</span> <span class="tlaGNC">           3 :     function supportsInterface(bytes4 interfaceId)</span></span>
+<span id="L319"><span class="lineNum">     319</span>              :         public</span>
+<span id="L320"><span class="lineNum">     320</span>              :         view</span>
+<span id="L321"><span class="lineNum">     321</span>              :         override(ERC721, ERC721Royalty, AccessControl)</span>
+<span id="L322"><span class="lineNum">     322</span>              :         returns (bool)</span>
+<span id="L323"><span class="lineNum">     323</span>              :     {</span>
+<span id="L324"><span class="lineNum">     324</span> <span class="tlaGNC">           3 :         return super.supportsInterface(interfaceId);</span></span>
+<span id="L325"><span class="lineNum">     325</span>              :     }</span>
+<span id="L326"><span class="lineNum">     326</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

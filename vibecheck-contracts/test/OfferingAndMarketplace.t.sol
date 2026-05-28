@@ -432,3 +432,252 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         return abi.encodePacked(r, s, v);
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// Admin tests — OfferingNFT y NFTMarketplace (coverage)
+// ══════════════════════════════════════════════════════════════════════════
+
+contract AdminCoverageTest is Test, ERC721Holder {
+
+    address admin     = makeAddr("admin2");
+    address organizer = makeAddr("organizer2");
+    address treasury  = makeAddr("treasury2");
+    address buyer     = makeAddr("buyer2");
+    address seller    = makeAddr("seller2");
+    address stranger  = makeAddr("stranger2");
+
+    uint256 venueSignerPk = 0x1338;
+    address venueSigner   = vm.addr(0x1338);
+
+    MockERC20         usdc;
+    MockERC20         vbk;
+    MockUniswapRouter router;
+    EventFactory      factory;
+    OfferingNFT       offering;
+    NFTMarketplace    marketplace;
+    EventNFT          nft;
+
+    uint256 constant PRICE_USDC = 50 * 1e6;
+    uint256 constant EVENT_DATE = 30 days;
+
+    function setUp() public {
+        usdc   = new MockERC20("USDC", "USDC", 6);
+        vbk    = new MockERC20("VBK",  "VBK",  18);
+        router = new MockUniswapRouter();
+
+        vm.prank(admin);
+        factory = new EventFactory(admin, address(usdc), address(vbk), address(router), treasury);
+        vm.prank(admin);
+        offering = new OfferingNFT(admin, factory, treasury);
+        vm.prank(admin);
+        marketplace = new NFTMarketplace(admin, factory, treasury);
+
+        vm.startPrank(admin);
+        factory.setOffering(address(offering));
+        factory.setMarketplace(address(marketplace));
+        factory.grantOrganizer(organizer);
+        vm.stopPrank();
+
+        EventFactory.EventParams memory p = EventFactory.EventParams({
+            name: "Admin Coverage Event",
+            symbol: "ADMC",
+            eventDate: block.timestamp + EVENT_DATE,
+            maxResalePriceBps: 15_000,
+            royaltyBps: 500,
+            venueSigner: venueSigner,
+            baseURI: "ipfs://admin/"
+        });
+        EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
+        t[0] = EventNFT.Tier("General", PRICE_USDC, 100, 0);
+
+        vm.prank(organizer);
+        nft = EventNFT(factory.launchEvent(p, t));
+
+        usdc.mint(buyer,   1_000 * 1e6);
+        usdc.mint(seller,  1_000 * 1e6);
+        vbk.mint(buyer,    1_000_000 * 1e18);
+    }
+
+    // ── OfferingNFT admin ───────────────────────────────────────────────
+
+    function test_setPlatformFeeUSDC_success() public {
+        vm.prank(admin);
+        offering.setPlatformFeeUSDC(300);
+        assertEq(offering.platformFeeBpsUSDC(), 300);
+    }
+
+    function test_setPlatformFeeUSDC_aboveMax_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(OfferingNFT.FeeAboveMax.selector);
+        offering.setPlatformFeeUSDC(1001);
+    }
+
+    function test_setPlatformFeeUSDC_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        offering.setPlatformFeeUSDC(300);
+    }
+
+    function test_setPlatformFeeVBK_success() public {
+        vm.prank(admin);
+        offering.setPlatformFeeVBK(100);
+        assertEq(offering.platformFeeBpsVBK(), 100);
+    }
+
+    function test_setPlatformFeeVBK_aboveMax_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(OfferingNFT.FeeAboveMax.selector);
+        offering.setPlatformFeeVBK(1001);
+    }
+
+    function test_setPlatformFeeVBK_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        offering.setPlatformFeeVBK(100);
+    }
+
+    function test_offering_unpause() public {
+        vm.prank(admin);
+        offering.pause();
+        vm.prank(admin);
+        offering.unpause();
+
+        vm.prank(buyer);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(buyer);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+        assertEq(tokenId, 1);
+    }
+
+    // ── NFTMarketplace admin ────────────────────────────────────────────
+
+    function test_setResaleFee_success() public {
+        vm.prank(admin);
+        marketplace.setResaleFee(500);
+        assertEq(marketplace.resaleFeeBps(), 500);
+    }
+
+    function test_setResaleFee_aboveMax_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(NFTMarketplace.FeeAboveMax.selector);
+        marketplace.setResaleFee(2001);
+    }
+
+    function test_setResaleFee_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        marketplace.setResaleFee(500);
+    }
+
+    function test_marketplace_pause_blocksList() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(admin);
+        marketplace.pause();
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+
+        vm.prank(seller);
+        vm.expectRevert();
+        marketplace.list(address(nft), tokenId, 60 * 1e6);
+    }
+
+    function test_marketplace_unpause() public {
+        vm.prank(admin);
+        marketplace.pause();
+        vm.prank(admin);
+        marketplace.unpause();
+
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        uint256 listingId = marketplace.list(address(nft), tokenId, 60 * 1e6);
+        assertTrue(marketplace.getListing(listingId).active);
+    }
+
+    function test_marketplace_pause_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        marketplace.pause();
+    }
+
+    function test_buy_eventOver_afterListing() public {
+        // Listar antes del evento
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        uint256 listingId = marketplace.list(address(nft), tokenId, 60 * 1e6);
+
+        // Avanzar al post-evento
+        vm.warp(block.timestamp + EVENT_DATE + 1);
+
+        vm.prank(buyer);
+        usdc.approve(address(marketplace), 60 * 1e6);
+        vm.prank(buyer);
+        vm.expectRevert(NFTMarketplace.EventOver.selector);
+        marketplace.buy(listingId);
+    }
+
+    function test_list_notOwner_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(stranger);
+        vm.expectRevert(NFTMarketplace.NotOwner.selector);
+        marketplace.list(address(nft), tokenId, 60 * 1e6);
+    }
+
+    function test_list_alreadyRedeemed_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        // Redimir
+        vm.warp(nft.eventDate() - 12 hours);
+        bytes32 payload = keccak256(abi.encode(address(nft), tokenId, block.chainid));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(venueSignerPk,
+            MessageHashUtils.toEthSignedMessageHash(payload));
+        vm.prank(seller);
+        nft.redeem(tokenId, abi.encodePacked(r, s, v));
+
+        vm.prank(seller);
+        vm.expectRevert(NFTMarketplace.AlreadyRedeemed.selector);
+        marketplace.list(address(nft), tokenId, 60 * 1e6);
+    }
+
+    function test_cancel_inactiveListing_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        uint256 listingId = marketplace.list(address(nft), tokenId, 60 * 1e6);
+
+        vm.prank(seller);
+        marketplace.cancel(listingId);
+
+        vm.prank(seller);
+        vm.expectRevert(NFTMarketplace.ListingInactive.selector);
+        marketplace.cancel(listingId);
+    }
+}

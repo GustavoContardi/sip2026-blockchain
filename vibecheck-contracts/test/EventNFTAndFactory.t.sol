@@ -414,3 +414,165 @@ contract EventNFTAndFactoryTest is Test {
         return abi.encodePacked(r, s, v);
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// EventNFT — funciones admin (coverage)
+// ══════════════════════════════════════════════════════════════════════════
+
+contract EventNFTAdminTest is Test {
+    using MessageHashUtils for bytes32;
+
+    address admin     = makeAddr("admin");
+    address organizer = makeAddr("organizer");
+    address minter    = makeAddr("minter");
+    address market    = makeAddr("market");
+    address stranger  = makeAddr("stranger");
+
+    uint256 venueSignerPk  = 0xABCDEF;
+    uint256 newSignerPk    = 0x999;
+    address venueSigner    = vm.addr(0xABCDEF);
+    address newVenueSigner = vm.addr(0x999);
+
+    address constant USDC   = address(0xC0FFEE);
+    address constant VBK    = address(0xBEEF);
+    address constant ROUTER = address(0xDEAD);
+    address constant TREASURY = address(0xFEE);
+
+    EventFactory factory;
+    EventNFT     nft;
+
+    function setUp() public {
+        vm.prank(admin);
+        factory = new EventFactory(admin, USDC, VBK, ROUTER, TREASURY);
+
+        vm.startPrank(admin);
+        factory.setOffering(minter);
+        factory.setMarketplace(market);
+        factory.grantOrganizer(organizer);
+        vm.stopPrank();
+
+        EventFactory.EventParams memory p = EventFactory.EventParams({
+            name: "Admin Test Event",
+            symbol: "ADM",
+            eventDate: block.timestamp + 7 days,
+            maxResalePriceBps: 12_000,
+            royaltyBps: 500,
+            venueSigner: venueSigner,
+            baseURI: "ipfs://QmAdmin/"
+        });
+        EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
+        t[0] = EventNFT.Tier("VIP", 100 * 1e6, 50, 0);
+
+        vm.prank(organizer);
+        nft = EventNFT(factory.launchEvent(p, t));
+    }
+
+    // ── setVenueSigner ──────────────────────────────────────────────────
+
+    function test_setVenueSigner_success() public {
+        vm.prank(organizer);
+        nft.setVenueSigner(newVenueSigner);
+        assertEq(nft.venueSigner(), newVenueSigner);
+    }
+
+    function test_setVenueSigner_zeroAddress_reverts() public {
+        vm.prank(organizer);
+        vm.expectRevert(EventNFT.ZeroAddress.selector);
+        nft.setVenueSigner(address(0));
+    }
+
+    function test_setVenueSigner_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        nft.setVenueSigner(newVenueSigner);
+    }
+
+    function test_setVenueSigner_redeemWithNewSigner() public {
+        // Cambiar el signer y verificar que redeem funciona con la nueva clave
+        vm.prank(organizer);
+        nft.setVenueSigner(newVenueSigner);
+
+        vm.prank(minter);
+        nft.mintTicket(makeAddr("buyer"), 0, 100 * 1e6);
+
+        vm.warp(nft.eventDate() - 12 hours);
+        bytes32 payload = keccak256(abi.encode(address(nft), uint256(1), block.chainid));
+        bytes32 ethMsg  = MessageHashUtils.toEthSignedMessageHash(payload);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(newSignerPk, ethMsg);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        vm.prank(makeAddr("buyer"));
+        nft.redeem(1, sig);
+        assertTrue(nft.redeemed(1));
+    }
+
+    // ── setBaseURI ──────────────────────────────────────────────────────
+
+    function test_setBaseURI_success() public {
+        vm.prank(minter);
+        nft.mintTicket(makeAddr("buyer"), 0, 100 * 1e6);
+
+        vm.prank(organizer);
+        nft.setBaseURI("ipfs://QmNewBase/");
+
+        assertEq(nft.tokenURI(1), "ipfs://QmNewBase/ticket/1");
+    }
+
+    function test_setBaseURI_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        nft.setBaseURI("ipfs://hack/");
+    }
+
+    function test_setBaseURI_empty_returnsEmpty() public {
+        vm.prank(minter);
+        nft.mintTicket(makeAddr("buyer"), 0, 100 * 1e6);
+
+        vm.prank(organizer);
+        nft.setBaseURI("");
+
+        assertEq(nft.tokenURI(1), "");
+    }
+
+    // ── pause / unpause ─────────────────────────────────────────────────
+
+    function test_nft_pause_blocksMint() public {
+        vm.prank(organizer);
+        nft.pause();
+
+        vm.prank(minter);
+        vm.expectRevert();
+        nft.mintTicket(makeAddr("buyer"), 0, 100 * 1e6);
+    }
+
+    function test_nft_unpause_resumesMint() public {
+        vm.prank(organizer);
+        nft.pause();
+        vm.prank(organizer);
+        nft.unpause();
+
+        vm.prank(minter);
+        uint256 tokenId = nft.mintTicket(makeAddr("buyer"), 0, 100 * 1e6);
+        assertEq(tokenId, 1);
+    }
+
+    function test_nft_pause_onlyOwner() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        nft.pause();
+    }
+
+    // ── supportsInterface ───────────────────────────────────────────────
+
+    function test_supportsInterface_ERC721() public view {
+        assertTrue(nft.supportsInterface(0x80ac58cd)); // ERC-721
+    }
+
+    function test_supportsInterface_ERC2981() public view {
+        assertTrue(nft.supportsInterface(0x2a55205a)); // ERC-2981 royalty
+    }
+
+    function test_supportsInterface_AccessControl() public view {
+        assertTrue(nft.supportsInterface(0x7965db0b)); // AccessControl
+    }
+}
