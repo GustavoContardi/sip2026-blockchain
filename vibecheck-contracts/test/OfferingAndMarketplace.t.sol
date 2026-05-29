@@ -47,8 +47,7 @@ contract MockERC20 {
 
 // Mock del router de Uniswap V2 (solo getAmountsOut)
 contract MockUniswapRouter {
-    // ratio: 1 USDC = 10 VBK (precio fijo para tests)
-    uint256 public constant RATIO = 10;
+    uint256 public constant RATIO = 10; // 1 USDC = 10 VBK
 
     function getAmountsOut(uint256 amountIn, address[] calldata)
         external pure returns (uint256[] memory amounts)
@@ -60,7 +59,6 @@ contract MockUniswapRouter {
 }
 
 contract OfferingAndMarketplaceTest is Test, ERC721Holder {
-    // ─── Actores ───────────────────────────────────────────────────────────────
     address admin     = makeAddr("admin");
     address organizer = makeAddr("organizer");
     address treasury  = makeAddr("treasury");
@@ -71,7 +69,6 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     uint256 venueSignerPk = 0x1337;
     address venueSigner   = vm.addr(venueSignerPk);
 
-    // ─── Contratos ─────────────────────────────────────────────────────────────
     MockERC20         public usdc;
     MockERC20         public vbk;
     MockUniswapRouter public router;
@@ -80,54 +77,46 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     NFTMarketplace    public marketplace;
     EventNFT          public nft;
 
-    uint256 constant PRICE_USDC = 50 * 1e6;   // 50 USDC (6 dec)
-    uint256 constant EVENT_DATE = 30 days;     // relativo a block.timestamp en setUp
+    uint256 constant PRICE_USDC = 50 * 1e6;
+    uint256 constant EVENT_DATE = 30 days;
 
     function setUp() public {
         usdc   = new MockERC20("USDC", "USDC", 6);
         vbk    = new MockERC20("VBK", "VBK", 18);
         router = new MockUniswapRouter();
 
-        // Factory
         vm.prank(admin);
         factory = new EventFactory(admin, address(usdc), address(vbk), address(router), treasury);
-
-        // Offering y Marketplace
         vm.prank(admin);
         offering = new OfferingNFT(admin, factory, treasury);
         vm.prank(admin);
         marketplace = new NFTMarketplace(admin, factory, treasury);
 
-        // Bootstrap
         vm.startPrank(admin);
         factory.setOffering(address(offering));
         factory.setMarketplace(address(marketplace));
-        factory.grantOrganizer(organizer);
         vm.stopPrank();
 
-        // Lanzar evento
         EventFactory.EventParams memory p = EventFactory.EventParams({
             name: "Festival Test",
             symbol: "FEST",
             eventDate: block.timestamp + EVENT_DATE,
-            maxResalePriceBps: 15_000, // 150% tope
+            maxResalePriceBps: 15_000,
             royaltyBps: 500,
             venueSigner: venueSigner,
             baseURI: "ipfs://test/"
         });
-
         EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
         t[0] = EventNFT.Tier({name: "General", priceUSDC: PRICE_USDC, supply: 100, sold: 0});
 
+        // Cualquier wallet puede lanzar — sin grantOrganizer
         vm.prank(organizer);
-        address nftAddr = factory.launchEvent(p, t);
-        nft = EventNFT(nftAddr);
+        nft = EventNFT(factory.launchEvent(p, t));
 
-        // Fondear buyer y seller con USDC/VBK
-        usdc.mint(buyer,   1_000 * 1e6);
-        usdc.mint(seller,  1_000 * 1e6);
+        usdc.mint(buyer,    1_000 * 1e6);
+        usdc.mint(seller,   1_000 * 1e6);
         usdc.mint(reseller, 1_000 * 1e6);
-        vbk.mint(buyer,    1_000_000 * 1e18);
+        vbk.mint(buyer,     1_000_000 * 1e18);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -144,7 +133,6 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertEq(tokenId, 1);
         assertEq(nft.ownerOf(1), buyer);
 
-        // Fee 5% al treasury, neto al organizer
         uint256 fee = PRICE_USDC * 500 / 10_000;
         assertEq(usdc.balanceOf(treasury), fee);
         assertEq(usdc.balanceOf(organizer), PRICE_USDC - fee);
@@ -185,9 +173,8 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     // ══════════════════════════════════════════════════════════════════════════
 
     function test_buyWithVBK_success() public {
-        // 50 USDC * 10 = 500 VBK (ratio del mock router)
         uint256 vbkNeeded = PRICE_USDC * 10;
-        uint256 maxVbk    = vbkNeeded * 110 / 100; // 10% slippage buffer
+        uint256 maxVbk    = vbkNeeded * 110 / 100;
 
         vm.prank(buyer);
         vbk.approve(address(offering), maxVbk);
@@ -198,18 +185,15 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertEq(tokenId, 1);
         assertEq(nft.ownerOf(1), buyer);
 
-        // Fee 2% (VBK), neto al organizer
         uint256 fee = vbkNeeded * 200 / 10_000;
         assertEq(vbk.balanceOf(treasury), fee);
         assertEq(vbk.balanceOf(organizer), vbkNeeded - fee);
-
-        // originalPrice guardado es en USDC, no VBK
         assertEq(nft.originalPrice(1), PRICE_USDC);
     }
 
     function test_buyWithVBK_slippageTooHigh_reverts() public {
         uint256 vbkNeeded = PRICE_USDC * 10;
-        uint256 maxVbk    = vbkNeeded - 1; // 1 wei menos del necesario
+        uint256 maxVbk    = vbkNeeded - 1;
 
         vm.prank(buyer);
         vbk.approve(address(offering), vbkNeeded);
@@ -219,14 +203,13 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         offering.buyWithVBK(address(nft), 0, maxVbk);
     }
 
-    function test_buyWithVBK_feeDiscount() public {
-        // VBK fee (2%) < USDC fee (5%)
+    function test_buyWithVBK_feeDiscount() public view {
         assertLt(offering.platformFeeBpsVBK(), offering.platformFeeBpsUSDC());
     }
 
     function test_quoteVBK() public view {
         uint256 quote = offering.quoteVBK(address(nft), 0);
-        assertEq(quote, PRICE_USDC * 10); // ratio mock = 10
+        assertEq(quote, PRICE_USDC * 10);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -241,17 +224,15 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     }
 
     function test_list_success() public {
-        uint256 tokenId = _buyTicketForSeller();
-        uint256 listPrice = 60 * 1e6; // 60 USDC (< 150% de 50 = 75)
+        uint256 tokenId   = _buyTicketForSeller();
+        uint256 listPrice = 60 * 1e6;
 
         vm.prank(seller);
         nft.approve(address(marketplace), tokenId);
-
         vm.prank(seller);
         uint256 listingId = marketplace.list(address(nft), tokenId, listPrice);
 
-        (address s, address e, uint256 t, uint256 p, bool active) =
-            _getListing(listingId);
+        (address s, address e, uint256 t, uint256 p, bool active) = _getListing(listingId);
         assertEq(s, seller);
         assertEq(e, address(nft));
         assertEq(t, tokenId);
@@ -261,7 +242,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_list_priceAboveCap_reverts() public {
         uint256 tokenId = _buyTicketForSeller();
-        uint256 overCap = 80 * 1e6; // 80 USDC > 75 USDC (150% de 50)
+        uint256 overCap = 80 * 1e6;
 
         vm.prank(seller);
         nft.approve(address(marketplace), tokenId);
@@ -273,7 +254,6 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_list_revertAfterEventDate() public {
         uint256 tokenId = _buyTicketForSeller();
-
         vm.warp(block.timestamp + EVENT_DATE + 1);
 
         vm.prank(seller);
@@ -329,21 +309,15 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(reseller);
         marketplace.buy(listingId);
 
-        // NFT al nuevo owner
         assertEq(nft.ownerOf(tokenId), reseller);
 
-        // Royalty 5%
-        uint256 royalty = listPrice * 500 / 10_000; // 3 USDC
+        uint256 royalty = listPrice * 500 / 10_000;
         assertEq(usdc.balanceOf(organizer), orgBefore + royalty);
 
-        // Fee plataforma 10%
-        uint256 fee = listPrice * 1_000 / 10_000; // 6 USDC
+        uint256 fee = listPrice * 1_000 / 10_000;
         assertEq(usdc.balanceOf(treasury), treasBefore + fee);
-
-        // Seller recibe el resto
         assertEq(usdc.balanceOf(seller), sellerBefore + listPrice - royalty - fee);
 
-        // Listing inactivo
         (, , , , bool active) = _getListing(listingId);
         assertFalse(active);
     }
@@ -375,13 +349,11 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(seller);
         uint256 listingId = marketplace.list(address(nft), tokenId, listPrice);
 
-        // Redimir el ticket
         vm.warp(nft.eventDate() - 12 hours);
         bytes memory sig = _signRedeem(venueSignerPk, address(nft), tokenId);
         vm.prank(seller);
         nft.redeem(tokenId, sig);
 
-        // Comprar → debe revertir
         vm.prank(reseller);
         usdc.approve(address(marketplace), listPrice);
         vm.prank(reseller);
@@ -394,8 +366,6 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     // ══════════════════════════════════════════════════════════════════════════
 
     function testFuzz_listPrice_clampedByCap(uint256 rawPrice) public {
-        uint256 cap = nft.maxResalePrice(0); // usa originalPrice=0 → cap=0
-        // Mintear para tener tokenId 1 con originalPrice real
         vm.prank(seller);
         usdc.approve(address(offering), PRICE_USDC);
         vm.prank(seller);
@@ -475,7 +445,6 @@ contract AdminCoverageTest is Test, ERC721Holder {
         vm.startPrank(admin);
         factory.setOffering(address(offering));
         factory.setMarketplace(address(marketplace));
-        factory.grantOrganizer(organizer);
         vm.stopPrank();
 
         EventFactory.EventParams memory p = EventFactory.EventParams({
@@ -490,6 +459,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
         EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
         t[0] = EventNFT.Tier("General", PRICE_USDC, 100, 0);
 
+        // Cualquier wallet puede lanzar — sin grantOrganizer
         vm.prank(organizer);
         nft = EventNFT(factory.launchEvent(p, t));
 
@@ -611,7 +581,6 @@ contract AdminCoverageTest is Test, ERC721Holder {
     }
 
     function test_buy_eventOver_afterListing() public {
-        // Listar antes del evento
         vm.prank(seller);
         usdc.approve(address(offering), PRICE_USDC);
         vm.prank(seller);
@@ -622,7 +591,6 @@ contract AdminCoverageTest is Test, ERC721Holder {
         vm.prank(seller);
         uint256 listingId = marketplace.list(address(nft), tokenId, 60 * 1e6);
 
-        // Avanzar al post-evento
         vm.warp(block.timestamp + EVENT_DATE + 1);
 
         vm.prank(buyer);
@@ -649,7 +617,6 @@ contract AdminCoverageTest is Test, ERC721Holder {
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
-        // Redimir
         vm.warp(nft.eventDate() - 12 hours);
         bytes32 payload = keccak256(abi.encode(address(nft), tokenId, block.chainid));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(venueSignerPk,

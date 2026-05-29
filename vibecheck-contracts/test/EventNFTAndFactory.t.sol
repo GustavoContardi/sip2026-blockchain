@@ -27,24 +27,22 @@ contract EventNFTAndFactoryTest is Test {
     EventNFT     public nft;
 
     // ─── Helpers ───────────────────────────────────────────────────────────────
-    address constant USDC    = address(0xC0FFEE);
-    address constant VBK     = address(0xBEEF);
-    address constant ROUTER  = address(0xDEAD);
+    address constant USDC     = address(0xC0FFEE);
+    address constant VBK      = address(0xBEEF);
+    address constant ROUTER   = address(0xDEAD);
     address constant TREASURY = address(0xFEE);
 
     EventFactory.EventParams eventParams;
     EventNFT.Tier[] tiers;
 
     function setUp() public {
-        // Deploy factory
+        // Deploy factory — sin ORGANIZER_ROLE, cualquier wallet puede lanzar eventos
         vm.prank(admin);
         factory = new EventFactory(admin, USDC, VBK, ROUTER, TREASURY);
 
-        // Autorizar al minter (simula OfferingNFT) y marketplace
         vm.startPrank(admin);
         factory.setOffering(minter);
         factory.setMarketplace(market);
-        factory.grantOrganizer(organizer);
         vm.stopPrank();
 
         // Parámetros base del evento
@@ -61,7 +59,7 @@ contract EventNFTAndFactoryTest is Test {
         tiers.push(EventNFT.Tier({name: "VIP",     priceUSDC: 100 * 1e6, supply: 50,  sold: 0}));
         tiers.push(EventNFT.Tier({name: "General", priceUSDC:  50 * 1e6, supply: 500, sold: 0}));
 
-        // Lanzar evento
+        // Cualquier wallet puede lanzar un evento
         vm.prank(organizer);
         address nftAddr = factory.launchEvent(eventParams, tiers);
         nft = EventNFT(nftAddr);
@@ -71,10 +69,12 @@ contract EventNFTAndFactoryTest is Test {
     // EventFactory
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_factory_onlyOrganizerCanLaunch() public {
+    function test_factory_anyoneCanLaunch() public {
+        // Cualquier wallet puede lanzar un evento sin permiso previo
         vm.prank(stranger);
-        vm.expectRevert();
-        factory.launchEvent(eventParams, tiers);
+        address newNft = factory.launchEvent(eventParams, tiers);
+        assertTrue(factory.isEvent(newNft));
+        assertEq(factory.eventsLength(), 2);
     }
 
     function test_factory_registersEvent() public view {
@@ -99,25 +99,40 @@ contract EventNFTAndFactoryTest is Test {
         factory.setMarketplace(address(0x1234));
     }
 
+    function test_factory_setOffering_onlyAdmin() public {
+        // Factory nueva para poder llamar setOffering
+        vm.prank(admin);
+        EventFactory freshFactory = new EventFactory(admin, USDC, VBK, ROUTER, TREASURY);
+
+        vm.prank(stranger);
+        vm.expectRevert(EventFactory.OnlyAdmin.selector);
+        freshFactory.setOffering(minter);
+    }
+
+    function test_factory_setMarketplace_onlyAdmin() public {
+        vm.prank(admin);
+        EventFactory freshFactory = new EventFactory(admin, USDC, VBK, ROUTER, TREASURY);
+
+        vm.prank(stranger);
+        vm.expectRevert(EventFactory.OnlyAdmin.selector);
+        freshFactory.setMarketplace(market);
+    }
+
     function test_factory_requiresInfraBeforeLaunch() public {
         // Factory nueva sin setOffering ni setMarketplace
         vm.prank(admin);
         EventFactory bareFactory = new EventFactory(admin, USDC, VBK, ROUTER, TREASURY);
-        vm.prank(admin);
-        bareFactory.grantOrganizer(organizer);
 
         vm.prank(organizer);
         vm.expectRevert(EventFactory.InfraNotReady.selector);
         bareFactory.launchEvent(eventParams, tiers);
     }
 
-    function test_factory_revokeOrganizer() public {
-        vm.prank(admin);
-        factory.revokeOrganizer(organizer);
-
-        vm.prank(organizer);
-        vm.expectRevert();
-        factory.launchEvent(eventParams, tiers);
+    function test_factory_organizer_is_msgSender() public {
+        // El organizador del EventNFT es quien llama launchEvent (msg.sender)
+        vm.prank(stranger);
+        address newNft = factory.launchEvent(eventParams, tiers);
+        assertEq(EventNFT(newNft).organizer(), stranger);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -134,8 +149,6 @@ contract EventNFTAndFactoryTest is Test {
     }
 
     function test_nft_royaltyInfo() public view {
-        // Mintear primero para tener un tokenId válido
-        // Chequeamos solo el royaltyInfo default (no necesita tokenId existente)
         (address receiver, uint256 amount) = nft.royaltyInfo(0, 100 * 1e6);
         assertEq(receiver, organizer);
         assertEq(amount, 100 * 1e6 * 500 / 10_000); // 5%
@@ -214,7 +227,6 @@ contract EventNFTAndFactoryTest is Test {
     }
 
     function test_mintTicket_soldOut_reverts() public {
-        // tier 0 tiene supply 50; mintear 50+1
         for (uint256 i = 0; i < 50; i++) {
             vm.prank(minter);
             nft.mintTicket(makeAddr(string(abi.encode(i))), 0, 100 * 1e6);
@@ -245,7 +257,6 @@ contract EventNFTAndFactoryTest is Test {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        // buyer intenta transferir directamente → revert
         vm.prank(buyer);
         vm.expectRevert(EventNFT.TransferNotAllowed.selector);
         nft.transferFrom(buyer, stranger, 1);
@@ -255,11 +266,9 @@ contract EventNFTAndFactoryTest is Test {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        // Aprobar al marketplace
         vm.prank(buyer);
         nft.approve(market, 1);
 
-        // marketplace puede mover
         vm.prank(market);
         nft.transferFrom(buyer, stranger, 1);
         assertEq(nft.ownerOf(1), stranger);
@@ -269,13 +278,11 @@ contract EventNFTAndFactoryTest is Test {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        // Redimir
         vm.warp(nft.eventDate() - 12 hours);
         bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
         vm.prank(buyer);
         nft.redeem(1, sig);
 
-        // Intentar transferir post-redeem
         vm.prank(buyer);
         vm.expectRevert(EventNFT.TransferNotAllowed.selector);
         nft.transferFrom(buyer, stranger, 1);
@@ -315,8 +322,6 @@ contract EventNFTAndFactoryTest is Test {
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
         vm.warp(nft.eventDate() - 12 hours);
-
-        // Firmar con clave incorrecta
         bytes memory badSig = _signRedeem(0xDEADBEEF, address(nft), 1);
         vm.prank(buyer);
         vm.expectRevert(EventNFT.InvalidSignature.selector);
@@ -342,7 +347,6 @@ contract EventNFTAndFactoryTest is Test {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        // Fuera de ventana: mucho antes del evento
         vm.warp(nft.eventDate() - 2 days);
         bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
 
@@ -397,8 +401,7 @@ contract EventNFTAndFactoryTest is Test {
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
         uint256 cap = nft.maxResalePrice(1);
-        // 100 USDC * 12000 / 10000 = 120 USDC
-        assertEq(cap, 120 * 1e6);
+        assertEq(cap, 120 * 1e6); // 100 USDC * 12000 / 10000 = 120 USDC
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -433,9 +436,9 @@ contract EventNFTAdminTest is Test {
     address venueSigner    = vm.addr(0xABCDEF);
     address newVenueSigner = vm.addr(0x999);
 
-    address constant USDC   = address(0xC0FFEE);
-    address constant VBK    = address(0xBEEF);
-    address constant ROUTER = address(0xDEAD);
+    address constant USDC     = address(0xC0FFEE);
+    address constant VBK      = address(0xBEEF);
+    address constant ROUTER   = address(0xDEAD);
     address constant TREASURY = address(0xFEE);
 
     EventFactory factory;
@@ -448,7 +451,6 @@ contract EventNFTAdminTest is Test {
         vm.startPrank(admin);
         factory.setOffering(minter);
         factory.setMarketplace(market);
-        factory.grantOrganizer(organizer);
         vm.stopPrank();
 
         EventFactory.EventParams memory p = EventFactory.EventParams({
@@ -463,6 +465,7 @@ contract EventNFTAdminTest is Test {
         EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
         t[0] = EventNFT.Tier("VIP", 100 * 1e6, 50, 0);
 
+        // Cualquier wallet puede lanzar — organizer sin permiso previo
         vm.prank(organizer);
         nft = EventNFT(factory.launchEvent(p, t));
     }
@@ -488,7 +491,6 @@ contract EventNFTAdminTest is Test {
     }
 
     function test_setVenueSigner_redeemWithNewSigner() public {
-        // Cambiar el signer y verificar que redeem funciona con la nueva clave
         vm.prank(organizer);
         nft.setVenueSigner(newVenueSigner);
 
