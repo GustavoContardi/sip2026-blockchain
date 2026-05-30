@@ -134,8 +134,13 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertEq(nft.ownerOf(1), buyer);
 
         uint256 fee = PRICE_USDC * 500 / 10_000;
+        // El fee va directo al treasury
         assertEq(usdc.balanceOf(treasury), fee);
-        assertEq(usdc.balanceOf(organizer), PRICE_USDC - fee);
+        // El organizador NO cobra al instante: el neto queda en escrow
+        assertEq(usdc.balanceOf(organizer), 0);
+        assertEq(offering.escrowUSDC(address(nft)), PRICE_USDC - fee);
+        // Los fondos del neto están físicamente en el contrato
+        assertEq(usdc.balanceOf(address(offering)), PRICE_USDC - fee);
     }
 
     function test_buyWithUSDC_unknownEvent_reverts() public {
@@ -186,8 +191,11 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertEq(nft.ownerOf(1), buyer);
 
         uint256 fee = vbkNeeded * 200 / 10_000;
+        // El fee va directo al treasury
         assertEq(vbk.balanceOf(treasury), fee);
-        assertEq(vbk.balanceOf(organizer), vbkNeeded - fee);
+        // El organizador NO cobra al instante: el neto queda en escrow
+        assertEq(vbk.balanceOf(organizer), 0);
+        assertEq(offering.escrowVBK(address(nft)), vbkNeeded - fee);
         assertEq(nft.originalPrice(1), PRICE_USDC);
     }
 
@@ -210,6 +218,137 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     function test_quoteVBK() public view {
         uint256 quote = offering.quoteVBK(address(nft), 0);
         assertEq(quote, PRICE_USDC * 10);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // OfferingNFT — Escrow / releaseEscrow
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function test_releaseEscrow_USDC_afterEvent() public {
+        // Compra con USDC → el neto queda en escrow
+        vm.prank(buyer);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(buyer);
+        offering.buyWithUSDC(address(nft), 0);
+
+        uint256 fee     = PRICE_USDC * 500 / 10_000;
+        uint256 netToOrg = PRICE_USDC - fee;
+        assertEq(offering.escrowUSDC(address(nft)), netToOrg);
+
+        // Antes de la fecha del evento NO se puede liberar
+        assertFalse(offering.canRelease(address(nft)));
+
+        // Avanzar más allá de la fecha del evento
+        vm.warp(nft.eventDate() + 1);
+        assertTrue(offering.canRelease(address(nft)));
+
+        // Liberar el escrow → el organizador cobra
+        offering.releaseEscrow(address(nft));
+
+        assertEq(usdc.balanceOf(organizer), netToOrg);
+        assertEq(offering.escrowUSDC(address(nft)), 0);
+        assertTrue(offering.escrowReleased(address(nft)));
+    }
+
+    function test_releaseEscrow_VBK_afterEvent() public {
+        uint256 vbkNeeded = PRICE_USDC * 10;
+        uint256 maxVbk    = vbkNeeded * 110 / 100;
+
+        vm.prank(buyer);
+        vbk.approve(address(offering), maxVbk);
+        vm.prank(buyer);
+        offering.buyWithVBK(address(nft), 0, maxVbk);
+
+        uint256 fee      = vbkNeeded * 200 / 10_000;
+        uint256 netToOrg = vbkNeeded - fee;
+        assertEq(offering.escrowVBK(address(nft)), netToOrg);
+
+        vm.warp(nft.eventDate() + 1);
+        offering.releaseEscrow(address(nft));
+
+        assertEq(vbk.balanceOf(organizer), netToOrg);
+        assertEq(offering.escrowVBK(address(nft)), 0);
+    }
+
+    function test_releaseEscrow_mixedUSDCandVBK() public {
+        // Una compra en USDC y otra en VBK sobre el mismo evento
+        vm.prank(buyer);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(buyer);
+        offering.buyWithUSDC(address(nft), 0);
+
+        uint256 vbkNeeded = PRICE_USDC * 10;
+        uint256 maxVbk    = vbkNeeded * 110 / 100;
+        vm.prank(buyer);
+        vbk.approve(address(offering), maxVbk);
+        vm.prank(buyer);
+        offering.buyWithVBK(address(nft), 0, maxVbk);
+
+        uint256 usdcNet = PRICE_USDC - (PRICE_USDC * 500 / 10_000);
+        uint256 vbkNet  = vbkNeeded - (vbkNeeded * 200 / 10_000);
+
+        vm.warp(nft.eventDate() + 1);
+        offering.releaseEscrow(address(nft));
+
+        assertEq(usdc.balanceOf(organizer), usdcNet);
+        assertEq(vbk.balanceOf(organizer), vbkNet);
+    }
+
+    function test_releaseEscrow_beforeEvent_reverts() public {
+        vm.prank(buyer);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(buyer);
+        offering.buyWithUSDC(address(nft), 0);
+
+        // Todavía no pasó la fecha del evento
+        vm.expectRevert(OfferingNFT.EventNotOver.selector);
+        offering.releaseEscrow(address(nft));
+    }
+
+    function test_releaseEscrow_twice_reverts() public {
+        vm.prank(buyer);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(buyer);
+        offering.buyWithUSDC(address(nft), 0);
+
+        vm.warp(nft.eventDate() + 1);
+        offering.releaseEscrow(address(nft));
+
+        // Segundo intento → revierte
+        vm.expectRevert(OfferingNFT.AlreadyReleased.selector);
+        offering.releaseEscrow(address(nft));
+    }
+
+    function test_releaseEscrow_nothingToRelease_reverts() public {
+        // Evento sin ventas
+        vm.warp(nft.eventDate() + 1);
+        vm.expectRevert(OfferingNFT.NothingToRelease.selector);
+        offering.releaseEscrow(address(nft));
+    }
+
+    function test_releaseEscrow_unknownEvent_reverts() public {
+        vm.warp(block.timestamp + EVENT_DATE + 1);
+        vm.expectRevert(OfferingNFT.UnknownEvent.selector);
+        offering.releaseEscrow(address(0xBAD));
+    }
+
+    function test_releaseEscrow_anyoneCanTrigger_fundsGoToOrganizer() public {
+        // Cualquiera puede disparar la liberación, pero el dinero va al organizador
+        vm.prank(buyer);
+        usdc.approve(address(offering), PRICE_USDC);
+        vm.prank(buyer);
+        offering.buyWithUSDC(address(nft), 0);
+
+        uint256 netToOrg = PRICE_USDC - (PRICE_USDC * 500 / 10_000);
+
+        vm.warp(nft.eventDate() + 1);
+
+        // Lo dispara un tercero (reseller), no el organizador
+        vm.prank(reseller);
+        offering.releaseEscrow(address(nft));
+
+        // El dinero igual fue al organizador
+        assertEq(usdc.balanceOf(organizer), netToOrg);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
