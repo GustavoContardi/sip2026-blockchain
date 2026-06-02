@@ -239,7 +239,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertFalse(offering.canRelease(address(nft)));
 
         // Avanzar más allá de la fecha del evento
-        vm.warp(nft.eventDate() + 1);
+        vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         assertTrue(offering.canRelease(address(nft)));
 
         // Liberar el escrow → el organizador cobra
@@ -263,7 +263,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         uint256 netToOrg = vbkNeeded - fee;
         assertEq(offering.escrowVBK(address(nft)), netToOrg);
 
-        vm.warp(nft.eventDate() + 1);
+        vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         offering.releaseEscrow(address(nft));
 
         assertEq(vbk.balanceOf(organizer), netToOrg);
@@ -287,7 +287,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         uint256 usdcNet = PRICE_USDC - (PRICE_USDC * 500 / 10_000);
         uint256 vbkNet  = vbkNeeded - (vbkNeeded * 200 / 10_000);
 
-        vm.warp(nft.eventDate() + 1);
+        vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         offering.releaseEscrow(address(nft));
 
         assertEq(usdc.balanceOf(organizer), usdcNet);
@@ -311,7 +311,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(buyer);
         offering.buyWithUSDC(address(nft), 0);
 
-        vm.warp(nft.eventDate() + 1);
+        vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         offering.releaseEscrow(address(nft));
 
         // Segundo intento → revierte
@@ -321,7 +321,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_releaseEscrow_nothingToRelease_reverts() public {
         // Evento sin ventas
-        vm.warp(nft.eventDate() + 1);
+        vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         vm.expectRevert(OfferingNFT.NothingToRelease.selector);
         offering.releaseEscrow(address(nft));
     }
@@ -341,7 +341,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
         uint256 netToOrg = PRICE_USDC - (PRICE_USDC * 500 / 10_000);
 
-        vm.warp(nft.eventDate() + 1);
+        vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
 
         // Lo dispara un tercero (reseller), no el organizador
         vm.prank(reseller);

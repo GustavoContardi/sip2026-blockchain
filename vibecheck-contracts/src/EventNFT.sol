@@ -77,6 +77,7 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     // -----------------------------------------------------------------
 
     event TicketSold(address indexed buyer, uint256 indexed tokenId, uint256 indexed tierIdx, uint256 priceUSDC);
+    event TicketRefundBurned(uint256 indexed tokenId, uint256 indexed tierIdx);
     event Redeemed(uint256 indexed tokenId, address indexed by);
     event VenueSignerUpdated(address indexed previous, address indexed next);
     event BaseURIUpdated(string newBaseURI);
@@ -202,6 +203,20 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
 
         _mint(to, tokenId);
         emit TicketSold(to, tokenId, tierIdx, paidUSDC);
+    }
+
+    /// @notice Quema un ticket en un reembolso y libera el cupo del tier.
+    ///         Solo el OfferingNFT (MINTER_ROLE), que coordina el reembolso y
+    ///         libera el escrow en la misma transacción. El `_burn` revierte si
+    ///         el token no existe, lo que impide quemar dos veces.
+    /// @dev El hook soulbound `_update` permite el burn (to == address(0)); no
+    ///      hace falta tocarlo. Si el contrato está pausado, `_burn` revierte
+    ///      por `ERC721Pausable`.
+    function refundBurn(uint256 tokenId) external onlyRole(MINTER_ROLE) {
+        uint256 tierIdx = tokenTier[tokenId];
+        _burn(tokenId);
+        tiers[tierIdx].sold -= 1;
+        emit TicketRefundBurned(tokenId, tierIdx);
     }
 
     // -----------------------------------------------------------------
