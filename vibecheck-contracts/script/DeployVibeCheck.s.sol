@@ -5,23 +5,23 @@ import {Script, console} from "forge-std/Script.sol";
 import {EventFactory} from "../src/EventFactory.sol";
 import {OfferingNFT} from "../src/OfferingNFT.sol";
 import {NFTMarketplace} from "../src/NFTMarketplace.sol";
+import {VbkToken} from "../src/VbkToken.sol";
 
 /**
- * @notice Deploya la infraestructura completa de VibeCheck:
- *         EventFactory + OfferingNFT + NFTMarketplace
+ * @notice Deploya la infraestructura completa de VibeCheck y la deja 100% operativa:
+ *         EventFactory + OfferingNFT + NFTMarketplace, con exenciones de burn VBK
+ *         y refundSigner ya configurados. Sin pasos manuales post-deploy.
+ *
+ * REQUISITO: la cuenta que corre el broadcast debe ser la owner del VbkToken
+ *            y el admin/owner del resto (es treasury en este script). Si no, los
+ *            setFeeExempt / setRefundSigner / setOffering revierten.
  *
  * Variables de entorno requeridas:
- *   TREASURY          — wallet que recibe fees de plataforma y es owner
+ *   TREASURY          — wallet que recibe fees, es owner de los contratos y admin del factory
  *   USDC_SEPOLIA      — address del USDC en Sepolia
- *   VBK_ADDR          — address del VbkToken ya deployado
+ *   VBK_ADDR          — address del VbkToken ya deployado (su owner debe ser TREASURY)
  *   UNISWAP_V2_ROUTER — address del Router V2 en Sepolia
- *
- * Orden de deploys:
- *   1. Deploy EventFactory
- *   2. Deploy OfferingNFT (lee usdc/vbk/router del factory)
- *   3. Deploy NFTMarketplace (lee usdc del factory)
- *   4. factory.setOffering(offering)
- *   5. factory.setMarketplace(marketplace)
+ *   REFUND_SIGNER     — address pública del firmante de reembolsos voluntarios (clave en el backend)
  *
  * Uso:
  *   forge script script/DeployVibeCheck.s.sol \
@@ -30,11 +30,6 @@ import {NFTMarketplace} from "../src/NFTMarketplace.sol";
  *     --verify \
  *     --etherscan-api-key $ETHERSCAN_API_KEY \
  *     -vvvv
- *
- * Post-deploy (manual, con el token owner):
- *   vbk.setFeeExempt(offering, true)
- *   vbk.setFeeExempt(marketplace, true)
- *   factory.grantOrganizer(0xProductoraAddress)
  */
 contract DeployVibeCheck is Script {
     function run() external returns (
@@ -42,10 +37,11 @@ contract DeployVibeCheck is Script {
         OfferingNFT    offering,
         NFTMarketplace marketplace
     ) {
-        address treasury = vm.envAddress("TREASURY");
-        address usdc     = vm.envAddress("USDC_SEPOLIA");
-        address vbk      = vm.envAddress("VBK_ADDR");
-        address router   = vm.envAddress("UNISWAP_V2_ROUTER");
+        address treasury     = vm.envAddress("TREASURY");
+        address usdc         = vm.envAddress("USDC_SEPOLIA");
+        address vbk          = vm.envAddress("VBK_ADDR");
+        address router       = vm.envAddress("UNISWAP_V2_ROUTER");
+        address refundSigner = vm.envAddress("REFUND_SIGNER");
 
         vm.startBroadcast();
 
@@ -62,6 +58,15 @@ contract DeployVibeCheck is Script {
         factory.setOffering(address(offering));
         factory.setMarketplace(address(marketplace));
 
+        // 5. Exenciones de burn VBK: sin esto, los pagos en VBK pierden 2% en cada
+        //    transferencia interna y corrompen los montos del escrow.
+        VbkToken(vbk).setFeeExempt(address(offering), true);
+        VbkToken(vbk).setFeeExempt(address(marketplace), true);
+
+        // 6. Firmante de reembolsos voluntarios. Sin esto, refundVoluntary revierte
+        //    con RefundSignerNotSet.
+        offering.setRefundSigner(refundSigner);
+
         vm.stopBroadcast();
 
         console.log("=== VibeCheck deployed ===");
@@ -70,19 +75,19 @@ contract DeployVibeCheck is Script {
         console.log("NFTMarketplace:  ", address(marketplace));
         console.log("");
         console.log("Config:");
-        console.log("  USDC:    ", usdc);
-        console.log("  VBK:     ", vbk);
-        console.log("  Router:  ", router);
-        console.log("  Treasury:", treasury);
+        console.log("  USDC:        ", usdc);
+        console.log("  VBK:         ", vbk);
+        console.log("  Router:      ", router);
+        console.log("  Treasury:    ", treasury);
+        console.log("  RefundSigner:", refundSigner);
         console.log("");
         console.log("Fees:");
         console.log("  Venta primaria USDC:  5%");
         console.log("  Venta primaria VBK:   2%");
-        console.log("  Reventa fee:         10%");
+        console.log("  Reventa USDC:         7%");
+        console.log("  Reventa VBK:          4%");
         console.log("");
-        console.log("Next steps (manual):");
-        console.log("  vbk.setFeeExempt(offering, true)");
-        console.log("  vbk.setFeeExempt(marketplace, true)");
-        console.log("  factory.grantOrganizer(0xProductoraAddress)");
+        console.log("Estado: feeExempt(offering/marketplace) y refundSigner ya seteados.");
+        console.log("Listo para launchEvent(...). No quedan pasos manuales.");
     }
 }

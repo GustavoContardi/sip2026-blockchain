@@ -111,7 +111,7 @@ contract RefundsTest is Test {
         vm.stopPrank();
         vm.startPrank(reseller);
         usdc.approve(address(marketplace), price);
-        marketplace.buy(lid);
+        marketplace.buyWithUSDC(lid);
         vm.stopPrank();
     }
 
@@ -322,5 +322,73 @@ contract RefundsTest is Test {
         uint256 before = usdc.balanceOf(organizer);
         offering.releaseEscrow(address(nft));
         assertEq(usdc.balanceOf(organizer) - before, net);
+    }
+
+    // ══════════════════════════ Marketplace bloqueado por cancelación ══════════════════
+
+    function test_marketplace_listWhenCancelled_reverts() public {
+        uint256 tokenId = _buyUSDC();
+        vm.prank(admin);
+        offering.cancelEvent(address(nft));
+
+        vm.startPrank(buyer);
+        nft.approve(address(marketplace), tokenId);
+        vm.expectRevert(NFTMarketplace.EventCancelled.selector);
+        marketplace.list(address(nft), tokenId, 55 * 1e6);
+        vm.stopPrank();
+    }
+
+    function test_marketplace_buyUSDCWhenCancelled_reverts() public {
+        uint256 tokenId = _buyUSDC();
+        // El listing se crea antes de la cancelación
+        vm.startPrank(buyer);
+        nft.approve(address(marketplace), tokenId);
+        uint256 lid = marketplace.list(address(nft), tokenId, 55 * 1e6);
+        vm.stopPrank();
+
+        vm.prank(admin);
+        offering.cancelEvent(address(nft));
+
+        // El listing existe y estaba activo, pero la compra queda bloqueada
+        vm.startPrank(reseller);
+        usdc.approve(address(marketplace), 55 * 1e6);
+        vm.expectRevert(NFTMarketplace.EventCancelled.selector);
+        marketplace.buyWithUSDC(lid);
+        vm.stopPrank();
+    }
+
+    function test_marketplace_buyVBKWhenCancelled_reverts() public {
+        uint256 tokenId = _buyUSDC();
+        vm.startPrank(buyer);
+        nft.approve(address(marketplace), tokenId);
+        uint256 lid = marketplace.list(address(nft), tokenId, 55 * 1e6);
+        vm.stopPrank();
+
+        vm.prank(admin);
+        offering.cancelEvent(address(nft));
+
+        uint256 q = 55 * 1e6 * 10; // ratio 1:10
+        vbk.mint(reseller, q);
+        vm.startPrank(reseller);
+        vbk.approve(address(marketplace), q);
+        vm.expectRevert(NFTMarketplace.EventCancelled.selector);
+        marketplace.buyWithVBK(lid, q);
+        vm.stopPrank();
+    }
+
+    function test_marketplace_cancelListingAfterEventCancel_succeeds() public {
+        uint256 tokenId = _buyUSDC();
+        vm.startPrank(buyer);
+        nft.approve(address(marketplace), tokenId);
+        uint256 lid = marketplace.list(address(nft), tokenId, 55 * 1e6);
+        vm.stopPrank();
+
+        vm.prank(admin);
+        offering.cancelEvent(address(nft));
+
+        // El seller puede deslistarse aunque el evento esté cancelado
+        vm.prank(buyer);
+        marketplace.cancel(lid);
+        assertFalse(marketplace.getListing(lid).active);
     }
 }

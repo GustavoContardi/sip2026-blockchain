@@ -446,14 +446,14 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         uint256 treasBefore  = usdc.balanceOf(treasury);
 
         vm.prank(reseller);
-        marketplace.buy(listingId);
+        marketplace.buyWithUSDC(listingId);
 
         assertEq(nft.ownerOf(tokenId), reseller);
 
         uint256 royalty = listPrice * 500 / 10_000;
         assertEq(usdc.balanceOf(organizer), orgBefore + royalty);
 
-        uint256 fee = listPrice * 1_000 / 10_000;
+        uint256 fee = listPrice * 700 / 10_000;
         assertEq(usdc.balanceOf(treasury), treasBefore + fee);
         assertEq(usdc.balanceOf(seller), sellerBefore + listPrice - royalty - fee);
 
@@ -476,7 +476,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
         vm.prank(reseller);
         vm.expectRevert(NFTMarketplace.ListingInactive.selector);
-        marketplace.buy(listingId);
+        marketplace.buyWithUSDC(listingId);
     }
 
     function test_buy_afterRedeemBlocked() public {
@@ -497,7 +497,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         usdc.approve(address(marketplace), listPrice);
         vm.prank(reseller);
         vm.expectRevert(NFTMarketplace.AlreadyRedeemed.selector);
-        marketplace.buy(listingId);
+        marketplace.buyWithUSDC(listingId);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -662,20 +662,20 @@ contract AdminCoverageTest is Test, ERC721Holder {
 
     function test_setResaleFee_success() public {
         vm.prank(admin);
-        marketplace.setResaleFee(500);
-        assertEq(marketplace.resaleFeeBps(), 500);
+        marketplace.setResaleFeeUSDC(500);
+        assertEq(marketplace.resaleFeeBpsUSDC(), 500);
     }
 
     function test_setResaleFee_aboveMax_reverts() public {
         vm.prank(admin);
         vm.expectRevert(NFTMarketplace.FeeAboveMax.selector);
-        marketplace.setResaleFee(2001);
+        marketplace.setResaleFeeUSDC(2001);
     }
 
     function test_setResaleFee_onlyOwner() public {
         vm.prank(stranger);
         vm.expectRevert();
-        marketplace.setResaleFee(500);
+        marketplace.setResaleFeeUSDC(500);
     }
 
     function test_marketplace_pause_blocksList() public {
@@ -736,7 +736,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
         usdc.approve(address(marketplace), 60 * 1e6);
         vm.prank(buyer);
         vm.expectRevert(NFTMarketplace.EventOver.selector);
-        marketplace.buy(listingId);
+        marketplace.buyWithUSDC(listingId);
     }
 
     function test_list_notOwner_reverts() public {
