@@ -230,7 +230,6 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
      *      Ventana de check-in: desde 1 día antes hasta 1 día después del evento.
      */
     function redeem(uint256 tokenId, bytes calldata signature) external {
-        if (ownerOf(tokenId) != msg.sender) revert TransferNotAllowed();
         if (redeemed[tokenId]) revert AlreadyRedeemed();
 
         // Ventana: [eventDate - 1 day, eventDate + 1 day]

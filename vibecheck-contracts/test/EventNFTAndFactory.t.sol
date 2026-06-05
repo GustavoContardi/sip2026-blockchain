@@ -355,17 +355,20 @@ contract EventNFTAndFactoryTest is Test {
         nft.redeem(1, sig);
     }
 
-    function test_redeem_notOwner_reverts() public {
-        vm.prank(minter);
-        nft.mintTicket(buyer, 0, 100 * 1e6);
+    function test_redeem_anyoneWithValidSigCanRedeem() public {
+    vm.prank(minter);
+    nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        vm.warp(nft.eventDate() - 12 hours);
-        bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
+    vm.warp(nft.eventDate() - 12 hours);
+    bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
 
-        vm.prank(stranger);
-        vm.expectRevert(EventNFT.TransferNotAllowed.selector);
-        nft.redeem(1, sig);
-    }
+    // La plataforma (o cualquiera) puede ejecutar el redeem si tiene firma válida
+    vm.prank(stranger);
+    nft.redeem(1, sig);
+
+    assertTrue(nft.redeemed(1));
+    assertTrue(nft.attended(1));
+}
 
     // ══════════════════════════════════════════════════════════════════════════
     // EventNFT — tokenURI dinámico
