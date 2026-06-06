@@ -52,8 +52,8 @@ contract OfferingNFT is ReentrancyGuard, Ownable, Pausable {
     IUniswapV2Router02 public immutable router;
     address public immutable treasury;
 
-    uint16 public platformFeeBpsUSDC = 500;  // 5%
-    uint16 public platformFeeBpsVBK  = 200;  // 2%
+    uint16 public platformFeeBpsUSDC = 700;  // 7%
+    uint16 public platformFeeBpsVBK  = 400;  // 4%
     uint16 public constant MAX_FEE_BPS = 1000; // 10%
 
     // -----------------------------------------------------------------
@@ -240,15 +240,17 @@ contract OfferingNFT is ReentrancyGuard, Ownable, Pausable {
         (, uint256 priceUSDC, ,) = evt.tiers(tierIdx);
 
         uint256 fee = (priceUSDC * platformFeeBpsUSDC) / 10_000;
-        uint256 netToEscrow = priceUSDC - fee;
 
+        // El fee se cobra ENCIMA del precio nominal.
+        // El comprador paga priceUSDC + fee en total.
+        // El escrow guarda priceUSDC completo; el organizador no absorbe el fee.
         if (fee > 0) usdc.safeTransferFrom(msg.sender, treasury, fee);
-        usdc.safeTransferFrom(msg.sender, address(this), netToEscrow);
+        usdc.safeTransferFrom(msg.sender, address(this), priceUSDC);
 
         tokenId = evt.mintTicket(msg.sender, tierIdx, priceUSDC);
 
-        escrowUSDC[eventNFT] += netToEscrow;
-        escrowUSDCByToken[eventNFT][tokenId] = netToEscrow;
+        escrowUSDC[eventNFT] += priceUSDC;
+        escrowUSDCByToken[eventNFT][tokenId] = priceUSDC;
         originalMinter[eventNFT][tokenId] = msg.sender;
 
         emit TicketPurchasedUSDC(msg.sender, eventNFT, tokenId, tierIdx, priceUSDC, fee);
@@ -281,15 +283,16 @@ contract OfferingNFT is ReentrancyGuard, Ownable, Pausable {
         if (vbkNeeded > maxVbkAmount) revert SlippageTooHigh(vbkNeeded, maxVbkAmount);
 
         uint256 fee = (vbkNeeded * platformFeeBpsVBK) / 10_000;
-        uint256 netToEscrow = vbkNeeded - fee;
 
+        // El fee se cobra ENCIMA del equivalente VBK del precio.
+        // El comprador paga vbkNeeded + fee en total.
         if (fee > 0) vbk.safeTransferFrom(msg.sender, treasury, fee);
-        vbk.safeTransferFrom(msg.sender, address(this), netToEscrow);
+        vbk.safeTransferFrom(msg.sender, address(this), vbkNeeded);
 
         tokenId = evt.mintTicket(msg.sender, tierIdx, priceUSDC);
 
-        escrowVBK[eventNFT] += netToEscrow;
-        escrowVBKByToken[eventNFT][tokenId] = netToEscrow;
+        escrowVBK[eventNFT] += vbkNeeded;
+        escrowVBKByToken[eventNFT][tokenId] = vbkNeeded;
         originalMinter[eventNFT][tokenId] = msg.sender;
 
         emit TicketPurchasedVBK(msg.sender, eventNFT, tokenId, tierIdx, vbkNeeded, fee, priceUSDC);

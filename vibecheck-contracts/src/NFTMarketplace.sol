@@ -50,6 +50,10 @@ contract NFTMarketplace is ReentrancyGuard, Ownable, Pausable {
 
     uint16 public resaleFeeBpsUSDC = 700;       // 7%
     uint16 public resaleFeeBpsVBK  = 400;       // 4%
+    /// @notice Fee de plataforma cobrado al donante en transferencias de regalo (sobre originalPrice).
+    uint16 public giftFeeBps      = 500;        // 5%
+    /// @notice Royalty al organizador cobrado al donante en transferencias de regalo (sobre originalPrice).
+    uint16 public giftRoyaltyBps  = 500;        // 5%
     uint16 public constant MAX_FEE_BPS = 2000;  // tope 20%
 
     struct Listing {
@@ -102,6 +106,18 @@ contract NFTMarketplace is ReentrancyGuard, Ownable, Pausable {
     error FeeAboveMax();
     error ZeroAddress();
     error SlippageTooHigh(uint256 quoted, uint256 max);
+
+    event TicketGifted(
+        address indexed eventNFT,
+        uint256 indexed tokenId,
+        address indexed from,
+        address     to,
+        uint256     originalPrice,
+        uint256     feePaid,
+        uint256     royaltyPaid
+    );
+    event GiftFeeUpdated(uint16 oldFee, uint16 newFee);
+    event GiftRoyaltyUpdated(uint16 oldBps, uint16 newBps);
 
     constructor(
         address owner_,
@@ -211,16 +227,20 @@ contract NFTMarketplace is ReentrancyGuard, Ownable, Pausable {
         (address royaltyReceiver, uint256 royalty) =
             IERC2981(l.eventNFT).royaltyInfo(l.tokenId, priceUSDC);
 
+        // Fee se cobra ENCIMA del precio listado (lo paga el comprador).
+        // Royalty se descuenta del precio listado (lo absorbe el vendedor).
+        // Comprador paga: priceUSDC + fee
+        // Vendedor recibe: priceUSDC - royalty
         uint256 fee = (priceUSDC * resaleFeeBpsUSDC) / 10_000;
-        uint256 sellerProceeds = priceUSDC - royalty - fee;
+        uint256 sellerProceeds = priceUSDC - royalty;
 
         l.active = false; // CEI
 
-        if (royalty > 0 && royaltyReceiver != address(0)) {
-            usdc.safeTransferFrom(msg.sender, royaltyReceiver, royalty);
-        }
         if (fee > 0) {
             usdc.safeTransferFrom(msg.sender, treasury, fee);
+        }
+        if (royalty > 0 && royaltyReceiver != address(0)) {
+            usdc.safeTransferFrom(msg.sender, royaltyReceiver, royalty);
         }
         usdc.safeTransferFrom(msg.sender, l.seller, sellerProceeds);
 
@@ -255,22 +275,92 @@ contract NFTMarketplace is ReentrancyGuard, Ownable, Pausable {
         (address royaltyReceiver, uint256 royaltyVBK) =
             IERC2981(l.eventNFT).royaltyInfo(l.tokenId, vbkNeeded);
 
+        // Fee se cobra ENCIMA del equivalente VBK (lo paga el comprador).
+        // Royalty se descuenta del equivalente VBK (lo absorbe el vendedor).
+        // Comprador paga: vbkNeeded + feeVBK
+        // Vendedor recibe: vbkNeeded - royaltyVBK
         uint256 feeVBK = (vbkNeeded * resaleFeeBpsVBK) / 10_000;
-        uint256 sellerProceedsVBK = vbkNeeded - royaltyVBK - feeVBK;
+        uint256 sellerProceedsVBK = vbkNeeded - royaltyVBK;
 
         l.active = false; // CEI
 
-        if (royaltyVBK > 0 && royaltyReceiver != address(0)) {
-            vbk.safeTransferFrom(msg.sender, royaltyReceiver, royaltyVBK);
-        }
         if (feeVBK > 0) {
             vbk.safeTransferFrom(msg.sender, treasury, feeVBK);
+        }
+        if (royaltyVBK > 0 && royaltyReceiver != address(0)) {
+            vbk.safeTransferFrom(msg.sender, royaltyReceiver, royaltyVBK);
         }
         vbk.safeTransferFrom(msg.sender, l.seller, sellerProceedsVBK);
 
         IERC721(l.eventNFT).safeTransferFrom(l.seller, msg.sender, l.tokenId);
 
         emit TicketResoldVBK(listingId, msg.sender, l.seller, vbkNeeded, royaltyVBK, feeVBK, priceUSDC);
+    }
+
+    // -----------------------------------------------------------------
+    // Configuración de fees de regalo (onlyOwner)
+    // -----------------------------------------------------------------
+
+    function setGiftFee(uint16 newFee) external onlyOwner {
+        if (newFee > MAX_FEE_BPS) revert FeeAboveMax();
+        emit GiftFeeUpdated(giftFeeBps, newFee);
+        giftFeeBps = newFee;
+    }
+
+    function setGiftRoyalty(uint16 newBps) external onlyOwner {
+        if (newBps > MAX_FEE_BPS) revert FeeAboveMax();
+        emit GiftRoyaltyUpdated(giftRoyaltyBps, newBps);
+        giftRoyaltyBps = newBps;
+    }
+
+    // -----------------------------------------------------------------
+    // Regalar entrada
+    // -----------------------------------------------------------------
+
+    /**
+     * @notice Transfiere una entrada como regalo.
+     *         El donante paga en USDC:
+     *           - giftFeeBps     del originalPrice → treasury (fee de plataforma)
+     *           - giftRoyaltyBps del originalPrice → organizer del evento
+     *         Requiere approve previo al marketplace tanto del NFT
+     *         como del monto USDC correspondiente (fee + royalty).
+     *
+     * Los fees garantizan que la plataforma y el organizador cobren
+     * aunque no haya precio de reventa de por medio.
+     *
+     * @param eventNFT  Address del contrato EventNFT.
+     * @param tokenId   Token a regalar.
+     * @param recipient Destinatario del regalo (no puede ser address(0)).
+     */
+    function giftTicket(
+        address eventNFT,
+        uint256 tokenId,
+        address recipient
+    ) external nonReentrant whenNotPaused {
+        if (recipient == address(0)) revert ZeroAddress();
+        if (!factory.isEvent(eventNFT)) revert UnknownEvent();
+        _requireNotCancelled(eventNFT);
+
+        EventNFT evt = EventNFT(eventNFT);
+        if (evt.ownerOf(tokenId) != msg.sender) revert NotOwner();
+        if (evt.redeemed(tokenId)) revert AlreadyRedeemed();
+        if (block.timestamp >= evt.eventDate()) revert EventOver();
+
+        // Los fees se calculan sobre el precio original de la venta primaria (en USDC).
+        // Se cobra siempre en USDC independientemente de cómo se compró el ticket.
+        uint256 originalPrice = evt.originalPrice(tokenId);
+        uint256 fee     = (originalPrice * giftFeeBps)     / 10_000;
+        uint256 royalty = (originalPrice * giftRoyaltyBps) / 10_000;
+        address organizer = evt.organizer();
+
+        // El donante paga fee + royalty en USDC antes de la transferencia del NFT.
+        if (fee > 0)     usdc.safeTransferFrom(msg.sender, treasury,  fee);
+        if (royalty > 0) usdc.safeTransferFrom(msg.sender, organizer, royalty);
+
+        // Transferencia del NFT: marketplace tiene MARKET_ROLE en EventNFT.
+        IERC721(eventNFT).safeTransferFrom(msg.sender, recipient, tokenId);
+
+        emit TicketGifted(eventNFT, tokenId, msg.sender, recipient, originalPrice, fee, royalty);
     }
 
     // -----------------------------------------------------------------

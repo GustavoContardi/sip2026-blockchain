@@ -84,7 +84,7 @@ contract RefundsTest is Test {
 
     function _buyUSDC() internal returns (uint256 tokenId) {
         vm.startPrank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC + (PRICE_USDC * 700 / 10_000));
         tokenId = offering.buyWithUSDC(address(nft), 0);
         vm.stopPrank();
     }
@@ -92,7 +92,7 @@ contract RefundsTest is Test {
     function _buyVBK() internal returns (uint256 tokenId) {
         vm.startPrank(buyer);
         uint256 q = offering.quoteVBK(address(nft), 0);
-        vbk.approve(address(offering), q);
+        vbk.approve(address(offering), q + (q * 400 / 10_000));
         tokenId = offering.buyWithVBK(address(nft), 0, q);
         vm.stopPrank();
     }
@@ -110,7 +110,9 @@ contract RefundsTest is Test {
         uint256 lid = marketplace.list(address(nft), tokenId, price);
         vm.stopPrank();
         vm.startPrank(reseller);
-        usdc.approve(address(marketplace), price);
+        // Fix: comprador paga price + 7% fee (fee encima del precio listado)
+        uint256 resaleFee = price * 700 / 10_000;
+        usdc.approve(address(marketplace), price + resaleFee);
         marketplace.buyWithUSDC(lid);
         vm.stopPrank();
     }
@@ -119,9 +121,9 @@ contract RefundsTest is Test {
 
     function test_refundVoluntary_USDC_success() public {
         uint256 tokenId = _buyUSDC();
-        uint256 net = PRICE_USDC - (PRICE_USDC * 500) / 10_000; // 47.5e6
-        uint256 restock = (net * 500) / 10_000;                 // 2.375e6
-        uint256 toBuyer = net - restock;                        // 45.125e6
+        // Fix: escrow guarda PRICE_USDC completo (fee cobrado encima al comprar)
+        uint256 restock = (PRICE_USDC * 500) / 10_000;          // 2.5e6
+        uint256 toBuyer = PRICE_USDC - restock;                 // 47.5e6
 
         uint256 balBefore = usdc.balanceOf(buyer);
         uint256 trBefore  = usdc.balanceOf(treasury);
@@ -144,10 +146,10 @@ contract RefundsTest is Test {
 
     function test_refundVoluntary_VBK_success() public {
         uint256 tokenId = _buyVBK();
-        uint256 q = PRICE_USDC * 10;                 // 500e6
-        uint256 net = q - (q * 200) / 10_000;        // 490e6
-        uint256 restock = (net * 500) / 10_000;
-        uint256 toBuyer = net - restock;
+        uint256 q       = PRICE_USDC * 10;               // 500e6 (vbkNeeded = escrow completo)
+        // Fix: escrow guarda q completo (fee cobrado encima al comprar)
+        uint256 restock = (q * 500) / 10_000;            // 25e6
+        uint256 toBuyer = q - restock;                   // 475e6
 
         uint256 balBefore = vbk.balanceOf(buyer);
         uint256 deadline = block.timestamp + 1 hours;
@@ -252,7 +254,7 @@ contract RefundsTest is Test {
     function test_refundCancelled_paysCurrentHolder() public {
         uint256 tokenId = _buyUSDC();
         _resell(tokenId, 60 * 1e6); // holder = reseller
-        uint256 net = PRICE_USDC - (PRICE_USDC * 500) / 10_000; // 47.5e6 en escrow
+        uint256 net = PRICE_USDC; // Fix: escrow guarda precio completo, holder cobra 100%
 
         vm.prank(admin);
         offering.cancelEvent(address(nft));
@@ -285,7 +287,7 @@ contract RefundsTest is Test {
         vm.prank(admin);
         offering.cancelEvent(address(nft));
         vm.startPrank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC + (PRICE_USDC * 700 / 10_000));
         vm.expectRevert(OfferingNFT.EventIsCancelled.selector);
         offering.buyWithUSDC(address(nft), 0);
         vm.stopPrank();
@@ -317,11 +319,11 @@ contract RefundsTest is Test {
 
     function test_release_afterGrace_success() public {
         _buyUSDC();
-        uint256 net = PRICE_USDC - (PRICE_USDC * 500) / 10_000;
         vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         uint256 before = usdc.balanceOf(organizer);
         offering.releaseEscrow(address(nft));
-        assertEq(usdc.balanceOf(organizer) - before, net);
+        // Fix: escrow guarda PRICE_USDC completo, organizador cobra el precio íntegro
+        assertEq(usdc.balanceOf(organizer) - before, PRICE_USDC);
     }
 
     // ══════════════════════════ Marketplace bloqueado por cancelación ══════════════════

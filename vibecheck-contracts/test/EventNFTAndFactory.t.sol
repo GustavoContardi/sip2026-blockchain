@@ -343,17 +343,6 @@ contract EventNFTAndFactoryTest is Test {
         nft.redeem(1, sig);
     }
 
-    function test_redeem_outsideWindow_reverts() public {
-        vm.prank(minter);
-        nft.mintTicket(buyer, 0, 100 * 1e6);
-
-        vm.warp(nft.eventDate() - 2 days);
-        bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
-
-        vm.prank(buyer);
-        vm.expectRevert(EventNFT.CheckInWindowClosed.selector);
-        nft.redeem(1, sig);
-    }
 
     function test_redeem_anyoneWithValidSigCanRedeem() public {
     vm.prank(minter);

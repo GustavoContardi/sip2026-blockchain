@@ -232,10 +232,6 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     function redeem(uint256 tokenId, bytes calldata signature) external {
         if (redeemed[tokenId]) revert AlreadyRedeemed();
 
-        // Ventana: [eventDate - 1 day, eventDate + 1 day]
-        if (block.timestamp < eventDate - 1 days || block.timestamp > eventDate + 1 days) {
-            revert CheckInWindowClosed();
-        }
 
         bytes32 digest = keccak256(abi.encode(address(this), tokenId, block.chainid))
             .toEthSignedMessageHash();

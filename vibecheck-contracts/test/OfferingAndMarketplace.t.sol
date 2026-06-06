@@ -77,7 +77,9 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     NFTMarketplace    public marketplace;
     EventNFT          public nft;
 
-    uint256 constant PRICE_USDC = 50 * 1e6;
+    uint256 constant PRICE_USDC       = 50 * 1e6;
+    // Total que paga el comprador = precio + fee (5%)
+    uint256 constant PRICE_USDC_TOTAL = PRICE_USDC + (PRICE_USDC * 700 / 10_000);
     uint256 constant EVENT_DATE = 30 days;
 
     function setUp() public {
@@ -125,7 +127,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_buyWithUSDC_success() public {
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
 
         vm.prank(buyer);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
@@ -133,19 +135,19 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertEq(tokenId, 1);
         assertEq(nft.ownerOf(1), buyer);
 
-        uint256 fee = PRICE_USDC * 500 / 10_000;
+        uint256 fee = PRICE_USDC * 700 / 10_000;
         // El fee va directo al treasury
         assertEq(usdc.balanceOf(treasury), fee);
         // El organizador NO cobra al instante: el neto queda en escrow
         assertEq(usdc.balanceOf(organizer), 0);
-        assertEq(offering.escrowUSDC(address(nft)), PRICE_USDC - fee);
+        assertEq(offering.escrowUSDC(address(nft)), PRICE_USDC);
         // Los fondos del neto están físicamente en el contrato
-        assertEq(usdc.balanceOf(address(offering)), PRICE_USDC - fee);
+        assertEq(usdc.balanceOf(address(offering)), PRICE_USDC);
     }
 
     function test_buyWithUSDC_unknownEvent_reverts() public {
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
 
         vm.prank(buyer);
         vm.expectRevert(OfferingNFT.UnknownEvent.selector);
@@ -154,7 +156,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_buyWithUSDC_invalidTier_reverts() public {
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
 
         vm.prank(buyer);
         vm.expectRevert(OfferingNFT.TierOutOfRange.selector);
@@ -166,7 +168,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         offering.pause();
 
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
 
         vm.prank(buyer);
         vm.expectRevert();
@@ -190,12 +192,12 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         assertEq(tokenId, 1);
         assertEq(nft.ownerOf(1), buyer);
 
-        uint256 fee = vbkNeeded * 200 / 10_000;
+        uint256 fee = vbkNeeded * 400 / 10_000;
         // El fee va directo al treasury
         assertEq(vbk.balanceOf(treasury), fee);
         // El organizador NO cobra al instante: el neto queda en escrow
         assertEq(vbk.balanceOf(organizer), 0);
-        assertEq(offering.escrowVBK(address(nft)), vbkNeeded - fee);
+        assertEq(offering.escrowVBK(address(nft)), vbkNeeded);
         assertEq(nft.originalPrice(1), PRICE_USDC);
     }
 
@@ -227,12 +229,12 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     function test_releaseEscrow_USDC_afterEvent() public {
         // Compra con USDC → el neto queda en escrow
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(buyer);
         offering.buyWithUSDC(address(nft), 0);
 
-        uint256 fee     = PRICE_USDC * 500 / 10_000;
-        uint256 netToOrg = PRICE_USDC - fee;
+        uint256 fee     = PRICE_USDC * 700 / 10_000;
+        uint256 netToOrg = PRICE_USDC; // fix: fee cobra encima, escrow guarda el precio completo
         assertEq(offering.escrowUSDC(address(nft)), netToOrg);
 
         // Antes de la fecha del evento NO se puede liberar
@@ -259,8 +261,8 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(buyer);
         offering.buyWithVBK(address(nft), 0, maxVbk);
 
-        uint256 fee      = vbkNeeded * 200 / 10_000;
-        uint256 netToOrg = vbkNeeded - fee;
+        uint256 fee      = vbkNeeded * 400 / 10_000;
+        uint256 netToOrg = vbkNeeded; // fix: fee cobra encima, escrow guarda el precio completo
         assertEq(offering.escrowVBK(address(nft)), netToOrg);
 
         vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
@@ -273,7 +275,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     function test_releaseEscrow_mixedUSDCandVBK() public {
         // Una compra en USDC y otra en VBK sobre el mismo evento
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(buyer);
         offering.buyWithUSDC(address(nft), 0);
 
@@ -284,8 +286,8 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(buyer);
         offering.buyWithVBK(address(nft), 0, maxVbk);
 
-        uint256 usdcNet = PRICE_USDC - (PRICE_USDC * 500 / 10_000);
-        uint256 vbkNet  = vbkNeeded - (vbkNeeded * 200 / 10_000);
+        uint256 usdcNet = PRICE_USDC;
+        uint256 vbkNet  = vbkNeeded;
 
         vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
         offering.releaseEscrow(address(nft));
@@ -296,7 +298,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_releaseEscrow_beforeEvent_reverts() public {
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(buyer);
         offering.buyWithUSDC(address(nft), 0);
 
@@ -307,7 +309,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function test_releaseEscrow_twice_reverts() public {
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(buyer);
         offering.buyWithUSDC(address(nft), 0);
 
@@ -335,11 +337,11 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
     function test_releaseEscrow_anyoneCanTrigger_fundsGoToOrganizer() public {
         // Cualquiera puede disparar la liberación, pero el dinero va al organizador
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(buyer);
         offering.buyWithUSDC(address(nft), 0);
 
-        uint256 netToOrg = PRICE_USDC - (PRICE_USDC * 500 / 10_000);
+        uint256 netToOrg = PRICE_USDC;
 
         vm.warp(nft.eventDate() + offering.RELEASE_GRACE() + 1);
 
@@ -357,7 +359,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function _buyTicketForSeller() internal returns (uint256 tokenId) {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         tokenId = offering.buyWithUSDC(address(nft), 0);
     }
@@ -438,8 +440,12 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(seller);
         uint256 listingId = marketplace.list(address(nft), tokenId, listPrice);
 
+        uint256 royalty = listPrice * 500 / 10_000;
+        uint256 fee     = listPrice * 700 / 10_000;
+        // Comprador paga listPrice + fee (fee encima del precio)
+        // Vendedor recibe listPrice - royalty (royalty descontado del precio)
         vm.prank(reseller);
-        usdc.approve(address(marketplace), listPrice);
+        usdc.approve(address(marketplace), listPrice + fee);
 
         uint256 sellerBefore = usdc.balanceOf(seller);
         uint256 orgBefore    = usdc.balanceOf(organizer);
@@ -449,13 +455,9 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         marketplace.buyWithUSDC(listingId);
 
         assertEq(nft.ownerOf(tokenId), reseller);
-
-        uint256 royalty = listPrice * 500 / 10_000;
         assertEq(usdc.balanceOf(organizer), orgBefore + royalty);
-
-        uint256 fee = listPrice * 700 / 10_000;
         assertEq(usdc.balanceOf(treasury), treasBefore + fee);
-        assertEq(usdc.balanceOf(seller), sellerBefore + listPrice - royalty - fee);
+        assertEq(usdc.balanceOf(seller), sellerBefore + listPrice - royalty);
 
         (, , , , bool active) = _getListing(listingId);
         assertFalse(active);
@@ -472,7 +474,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         marketplace.cancel(listingId);
 
         vm.prank(reseller);
-        usdc.approve(address(marketplace), 60 * 1e6);
+        usdc.approve(address(marketplace), 60 * 1e6 * 107 / 100);
 
         vm.prank(reseller);
         vm.expectRevert(NFTMarketplace.ListingInactive.selector);
@@ -493,8 +495,9 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
         vm.prank(seller);
         nft.redeem(tokenId, sig);
 
+        uint256 feeAmt = listPrice * 700 / 10_000;
         vm.prank(reseller);
-        usdc.approve(address(marketplace), listPrice);
+        usdc.approve(address(marketplace), listPrice + feeAmt);
         vm.prank(reseller);
         vm.expectRevert(NFTMarketplace.AlreadyRedeemed.selector);
         marketplace.buyWithUSDC(listingId);
@@ -506,7 +509,7 @@ contract OfferingAndMarketplaceTest is Test, ERC721Holder {
 
     function testFuzz_listPrice_clampedByCap(uint256 rawPrice) public {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -566,7 +569,9 @@ contract AdminCoverageTest is Test, ERC721Holder {
     NFTMarketplace    marketplace;
     EventNFT          nft;
 
-    uint256 constant PRICE_USDC = 50 * 1e6;
+    uint256 constant PRICE_USDC       = 50 * 1e6;
+    // Total que paga el comprador = precio + fee (5%)
+    uint256 constant PRICE_USDC_TOTAL = PRICE_USDC + (PRICE_USDC * 700 / 10_000);
     uint256 constant EVENT_DATE = 30 days;
 
     function setUp() public {
@@ -652,7 +657,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
         offering.unpause();
 
         vm.prank(buyer);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(buyer);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
         assertEq(tokenId, 1);
@@ -680,7 +685,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
 
     function test_marketplace_pause_blocksList() public {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -702,7 +707,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
         marketplace.unpause();
 
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -721,7 +726,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
 
     function test_buy_eventOver_afterListing() public {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -733,7 +738,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
         vm.warp(block.timestamp + EVENT_DATE + 1);
 
         vm.prank(buyer);
-        usdc.approve(address(marketplace), 60 * 1e6);
+        usdc.approve(address(marketplace), 60 * 1e6 * 107 / 100);
         vm.prank(buyer);
         vm.expectRevert(NFTMarketplace.EventOver.selector);
         marketplace.buyWithUSDC(listingId);
@@ -741,7 +746,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
 
     function test_list_notOwner_reverts() public {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -752,7 +757,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
 
     function test_list_alreadyRedeemed_reverts() public {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -770,7 +775,7 @@ contract AdminCoverageTest is Test, ERC721Holder {
 
     function test_cancel_inactiveListing_reverts() public {
         vm.prank(seller);
-        usdc.approve(address(offering), PRICE_USDC);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
         vm.prank(seller);
         uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
 
@@ -785,5 +790,137 @@ contract AdminCoverageTest is Test, ERC721Holder {
         vm.prank(seller);
         vm.expectRevert(NFTMarketplace.ListingInactive.selector);
         marketplace.cancel(listingId);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // NFTMarketplace — giftTicket
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function test_gift_success() public {
+        // seller compra y regala a stranger
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        // Calcular el costo del regalo
+        uint256 fee     = PRICE_USDC * marketplace.giftFeeBps()     / 10_000; // 5%
+        uint256 royalty = PRICE_USDC * marketplace.giftRoyaltyBps() / 10_000; // 5%
+
+        // seller aprueba el NFT al marketplace y el USDC para el regalo
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        usdc.approve(address(marketplace), fee + royalty);
+
+        uint256 treasBefore   = usdc.balanceOf(treasury);
+        uint256 orgBefore     = usdc.balanceOf(organizer);
+
+        vm.prank(seller);
+        marketplace.giftTicket(address(nft), tokenId, stranger);
+
+        // El recipient recibio el NFT
+        assertEq(nft.ownerOf(tokenId), stranger);
+
+        // El treasury recibio el fee de regalo (5% del precio original)
+        assertEq(usdc.balanceOf(treasury) - treasBefore, fee);
+
+        // El organizador recibio el royalty de regalo (5% del precio original)
+        assertEq(usdc.balanceOf(organizer) - orgBefore, royalty);
+
+        // assertEq(nft.ownerOf(tokenId), stranger) ya verificado arriba
+    }
+
+    function test_gift_notOwner_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        // No se necesita approve: giftTicket verifica ownerOf internamente
+        vm.prank(stranger);
+        vm.expectRevert(NFTMarketplace.NotOwner.selector);
+        marketplace.giftTicket(address(nft), tokenId, buyer);
+    }
+
+    function test_gift_alreadyRedeemed_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        // Redimir el ticket
+        vm.warp(nft.eventDate() - 12 hours);
+        bytes32 payload = keccak256(abi.encode(address(nft), tokenId, block.chainid));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(venueSignerPk,
+            MessageHashUtils.toEthSignedMessageHash(payload));
+        vm.prank(seller);
+        nft.redeem(tokenId, abi.encodePacked(r, s, v));
+
+        vm.prank(seller);
+        vm.expectRevert(NFTMarketplace.AlreadyRedeemed.selector);
+        marketplace.giftTicket(address(nft), tokenId, stranger);
+    }
+
+    function test_gift_zeroRecipient_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        vm.expectRevert(NFTMarketplace.ZeroAddress.selector);
+        marketplace.giftTicket(address(nft), tokenId, address(0));
+    }
+
+    function test_gift_cancelledEvent_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.prank(admin);
+        offering.cancelEvent(address(nft));
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        vm.expectRevert(NFTMarketplace.EventCancelled.selector);
+        marketplace.giftTicket(address(nft), tokenId, stranger);
+    }
+
+    function test_gift_eventOver_reverts() public {
+        vm.prank(seller);
+        usdc.approve(address(offering), PRICE_USDC_TOTAL);
+        vm.prank(seller);
+        uint256 tokenId = offering.buyWithUSDC(address(nft), 0);
+
+        vm.warp(nft.eventDate() + 1);
+
+        vm.prank(seller);
+        nft.approve(address(marketplace), tokenId);
+        vm.prank(seller);
+        vm.expectRevert(NFTMarketplace.EventOver.selector);
+        marketplace.giftTicket(address(nft), tokenId, stranger);
+    }
+
+    function test_setGiftFee_success() public {
+        vm.prank(admin);
+        marketplace.setGiftFee(300);
+        assertEq(marketplace.giftFeeBps(), 300);
+    }
+
+    function test_setGiftRoyalty_success() public {
+        vm.prank(admin);
+        marketplace.setGiftRoyalty(1000);
+        assertEq(marketplace.giftRoyaltyBps(), 1000);
+    }
+
+    function test_setGiftFee_aboveMax_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert(NFTMarketplace.FeeAboveMax.selector);
+        marketplace.setGiftFee(2001);
     }
 }
