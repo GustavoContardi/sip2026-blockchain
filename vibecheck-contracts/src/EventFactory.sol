@@ -15,9 +15,12 @@ import {EventNFT} from "./EventNFT.sol";
  *           1. Admin deploya el factory.
  *           2. Admin deploya OfferingNFT y NFTMarketplace apuntando a este factory.
  *           3. Admin llama setOffering(...) y setMarketplace(...) (one-shot).
- *           4. Cualquier wallet puede llamar launchEvent(...).
- *           5. El factory otorga automaticamente MINTER_ROLE al offering y MARKET_ROLE
- *              al marketplace sobre el nuevo EventNFT.
+ *           4. Admin opcionalmente llama setRewardsVault(...) para que todo
+ *              evento lanzado de aca en mas nazca con recompensas activadas.
+ *           5. Cualquier wallet puede llamar launchEvent(...).
+ *           6. El factory otorga automaticamente MINTER_ROLE al offering y MARKET_ROLE
+ *              al marketplace sobre el nuevo EventNFT, y le pasa el rewardsVault
+ *              vigente (si hay uno configurado) para que nazca ya activado.
  */
 contract EventFactory {
 
@@ -30,6 +33,13 @@ contract EventFactory {
     address public offering;
     address public marketplace;
 
+    /// @notice RewardsVault vigente. Se inyecta en cada EventNFT nuevo al
+    ///         momento de lanzarlo. address(0) = recompensas no configuradas
+    ///         todavia; los eventos nacen sin ellas (igual que antes).
+    ///         Cambiarlo NO afecta eventos ya lanzados — eso se hace, evento
+    ///         por evento, con EventNFT.setRewardsVault (el organizador).
+    address public rewardsVault;
+
     /// @notice Registro de todos los EventNFT lanzados.
     address[] public events;
     /// @notice Lookup rapido para validar que una address es un evento conocido.
@@ -37,6 +47,7 @@ contract EventFactory {
 
     event OfferingSet(address indexed offering);
     event MarketplaceSet(address indexed marketplace);
+    event RewardsVaultSet(address indexed previous, address indexed next);
     event EventLaunched(
         address indexed organizer,
         address indexed eventNFT,
@@ -89,6 +100,16 @@ contract EventFactory {
         emit MarketplaceSet(marketplace_);
     }
 
+    /// @notice Configura (o desactiva con address(0)) el RewardsVault que se
+    ///         inyecta a todo EventNFT lanzado de aca en mas. A diferencia de
+    ///         setOffering/setMarketplace, esto NO es one-shot: se puede
+    ///         cambiar las veces que haga falta (ej. si el vault se migra).
+    ///         No afecta eventos ya existentes.
+    function setRewardsVault(address rewardsVault_) external onlyAdmin {
+        emit RewardsVaultSet(rewardsVault, rewardsVault_);
+        rewardsVault = rewardsVault_;
+    }
+
     // -----------------------------------------------------------------
     // Lanzamiento de eventos — abierto a cualquier wallet
     // -----------------------------------------------------------------
@@ -123,7 +144,8 @@ contract EventFactory {
             maxResalePriceBps: p.maxResalePriceBps,
             royaltyBps: p.royaltyBps,
             venueSigner: p.venueSigner,
-            baseURI: p.baseURI
+            baseURI: p.baseURI,
+            rewardsVault: rewardsVault
         });
 
         EventNFT nft = new EventNFT(init, tiers);

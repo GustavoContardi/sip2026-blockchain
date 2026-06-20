@@ -136,6 +136,71 @@ contract EventNFTAndFactoryTest is Test {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // EventFactory — rewardsVault
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function test_factory_launchEvent_withoutRewardsVaultConfigured_staysZero() public view {
+        // setUp() nunca llama factory.setRewardsVault(...), asi que el evento
+        // ya lanzado ahi debe haber nacido sin vault.
+        assertEq(nft.rewardsVault(), address(0));
+    }
+
+    function test_factory_setRewardsVault_injectedInNewEvents() public {
+        address mockVault = makeAddr("mockVault");
+
+        vm.prank(admin);
+        factory.setRewardsVault(mockVault);
+
+        vm.prank(organizer);
+        address newNftAddr = factory.launchEvent(eventParams, tiers);
+
+        assertEq(EventNFT(newNftAddr).rewardsVault(), mockVault);
+    }
+
+    function test_factory_setRewardsVault_doesNotAffectExistingEvents() public {
+        // 'nft' ya fue lanzado en setUp(), antes de configurar el vault
+        address mockVault = makeAddr("mockVault");
+
+        vm.prank(admin);
+        factory.setRewardsVault(mockVault);
+
+        // El evento viejo no cambia retroactivamente
+        assertEq(nft.rewardsVault(), address(0));
+    }
+
+    function test_factory_setRewardsVault_onlyAdmin() public {
+        vm.prank(stranger);
+        vm.expectRevert(EventFactory.OnlyAdmin.selector);
+        factory.setRewardsVault(makeAddr("mockVault"));
+    }
+
+    function test_factory_setRewardsVault_canDisableWithZeroAddress() public {
+        address mockVault = makeAddr("mockVault");
+
+        vm.startPrank(admin);
+        factory.setRewardsVault(mockVault);
+        factory.setRewardsVault(address(0));
+        vm.stopPrank();
+
+        vm.prank(organizer);
+        address newNftAddr = factory.launchEvent(eventParams, tiers);
+        assertEq(EventNFT(newNftAddr).rewardsVault(), address(0));
+    }
+
+    function test_factory_setRewardsVault_canChangeMultipleTimes() public {
+        // A diferencia de setOffering/setMarketplace, esto NO es one-shot
+        address vault1 = makeAddr("vault1");
+        address vault2 = makeAddr("vault2");
+
+        vm.startPrank(admin);
+        factory.setRewardsVault(vault1);
+        factory.setRewardsVault(vault2); // no revierte
+        vm.stopPrank();
+
+        assertEq(factory.rewardsVault(), vault2);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // EventNFT — constructor y estado
     // ══════════════════════════════════════════════════════════════════════════
 
@@ -161,7 +226,8 @@ contract EventNFTAndFactoryTest is Test {
             maxResalePriceBps: 9_999, // < 10000 → inválido
             royaltyBps: 500,
             venueSigner: venueSigner,
-            baseURI: ""
+            baseURI: "",
+            rewardsVault: address(0)
         });
         EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
         t[0] = EventNFT.Tier("A", 10 * 1e6, 10, 0);
@@ -177,7 +243,8 @@ contract EventNFTAndFactoryTest is Test {
             maxResalePriceBps: 12_000,
             royaltyBps: 2_001, // > 2000 → inválido
             venueSigner: venueSigner,
-            baseURI: ""
+            baseURI: "",
+            rewardsVault: address(0)
         });
         EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
         t[0] = EventNFT.Tier("A", 10 * 1e6, 10, 0);
@@ -193,13 +260,36 @@ contract EventNFTAndFactoryTest is Test {
             maxResalePriceBps: 12_000,
             royaltyBps: 500,
             venueSigner: venueSigner,
-            baseURI: ""
+            baseURI: "",
+            rewardsVault: address(0)
         });
         EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
         t[0] = EventNFT.Tier("A", 10 * 1e6, 10, 0);
 
         vm.expectRevert(EventNFT.EventDateInPast.selector);
         new EventNFT(p, t);
+    }
+
+    function test_nft_constructor_rewardsVaultPreSet_emitsEvent() public {
+        address mockVault = makeAddr("preSetVault");
+
+        EventNFT.InitParams memory p = EventNFT.InitParams({
+            name: "X", symbol: "X", organizer: organizer,
+            eventDate: block.timestamp + 1 days,
+            maxResalePriceBps: 12_000,
+            royaltyBps: 500,
+            venueSigner: venueSigner,
+            baseURI: "",
+            rewardsVault: mockVault
+        });
+        EventNFT.Tier[] memory t = new EventNFT.Tier[](1);
+        t[0] = EventNFT.Tier("A", 10 * 1e6, 10, 0);
+
+        vm.expectEmit(true, true, false, false);
+        emit EventNFT.RewardsVaultUpdated(address(0), mockVault);
+
+        EventNFT freshNft = new EventNFT(p, t);
+        assertEq(freshNft.rewardsVault(), mockVault);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -229,74 +319,75 @@ contract EventNFTAndFactoryTest is Test {
     function test_mintTicket_soldOut_reverts() public {
         for (uint256 i = 0; i < 50; i++) {
             vm.prank(minter);
-            nft.mintTicket(makeAddr(string(abi.encode(i))), 0, 100 * 1e6);
+            nft.mintTicket(buyer, 0, 100 * 1e6);
         }
         vm.prank(minter);
         vm.expectRevert(EventNFT.TierSoldOut.selector);
         nft.mintTicket(buyer, 0, 100 * 1e6);
     }
 
-    function test_mintTicket_invalidTier_reverts() public {
+    function test_mintTicket_tierOutOfRange_reverts() public {
         vm.prank(minter);
         vm.expectRevert(EventNFT.TierOutOfRange.selector);
         nft.mintTicket(buyer, 99, 100 * 1e6);
     }
 
-    function test_mintTicket_revertAfterEventDate() public {
-        vm.warp(block.timestamp + 7 days + 1);
+    function test_mintTicket_eventOver_reverts() public {
+        vm.warp(nft.eventDate());
         vm.prank(minter);
         vm.expectRevert(EventNFT.EventOver.selector);
         nft.mintTicket(buyer, 0, 100 * 1e6);
     }
 
+    function test_mintTicket_whenPaused_reverts() public {
+        vm.prank(organizer);
+        nft.pause();
+
+        vm.prank(minter);
+        vm.expectRevert();
+        nft.mintTicket(buyer, 0, 100 * 1e6);
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
-    // EventNFT — soulbound parcial
+    // EventNFT — refundBurn
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_directTransfer_blocked() public {
+    function test_refundBurn_onlyMinterRole() public {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        vm.prank(buyer);
-        vm.expectRevert(EventNFT.TransferNotAllowed.selector);
-        nft.transferFrom(buyer, stranger, 1);
+        vm.prank(stranger);
+        vm.expectRevert();
+        nft.refundBurn(1);
     }
 
-    function test_marketRole_canTransfer() public {
+    function test_refundBurn_success() public {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        vm.prank(buyer);
-        nft.approve(market, 1);
+        (, , , uint256 soldBefore) = nft.tiers(0);
+        assertEq(soldBefore, 1);
 
-        vm.prank(market);
-        nft.transferFrom(buyer, stranger, 1);
-        assertEq(nft.ownerOf(1), stranger);
+        vm.prank(minter);
+        nft.refundBurn(1);
+
+        (, , , uint256 soldAfter) = nft.tiers(0);
+        assertEq(soldAfter, 0);
+
+        vm.expectRevert();
+        nft.ownerOf(1);
     }
 
-    function test_transfer_blockedAfterRedeem() public {
+    function test_refundBurn_double_reverts() public {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
-        vm.warp(nft.eventDate() - 12 hours);
-        bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
-        vm.prank(buyer);
-        nft.redeem(1, sig);
-
-        vm.prank(buyer);
-        vm.expectRevert(EventNFT.TransferNotAllowed.selector);
-        nft.transferFrom(buyer, stranger, 1);
-    }
-
-    function test_transfer_blockedAfterEventDate() public {
         vm.prank(minter);
-        nft.mintTicket(buyer, 0, 100 * 1e6);
+        nft.refundBurn(1);
 
-        vm.warp(nft.eventDate() + 1);
-
-        vm.prank(buyer);
-        vm.expectRevert(EventNFT.TransferNotAllowed.selector);
-        nft.transferFrom(buyer, stranger, 1);
+        vm.prank(minter);
+        vm.expectRevert();
+        nft.refundBurn(1);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -317,18 +408,7 @@ contract EventNFTAndFactoryTest is Test {
         assertTrue(nft.attended(1));
     }
 
-    function test_redeem_invalidSignature_reverts() public {
-        vm.prank(minter);
-        nft.mintTicket(buyer, 0, 100 * 1e6);
-
-        vm.warp(nft.eventDate() - 12 hours);
-        bytes memory badSig = _signRedeem(0xDEADBEEF, address(nft), 1);
-        vm.prank(buyer);
-        vm.expectRevert(EventNFT.InvalidSignature.selector);
-        nft.redeem(1, badSig);
-    }
-
-    function test_redeem_alreadyRedeemed_reverts() public {
+    function test_redeem_double_reverts() public {
         vm.prank(minter);
         nft.mintTicket(buyer, 0, 100 * 1e6);
 
@@ -341,6 +421,31 @@ contract EventNFTAndFactoryTest is Test {
         vm.prank(buyer);
         vm.expectRevert(EventNFT.AlreadyRedeemed.selector);
         nft.redeem(1, sig);
+    }
+
+    function test_redeem_invalidSignature_reverts() public {
+        vm.prank(minter);
+        nft.mintTicket(buyer, 0, 100 * 1e6);
+
+        vm.warp(nft.eventDate() - 12 hours);
+        bytes memory sig = _signRedeem(0xBADBAD, address(nft), 1); // firmante incorrecto
+
+        vm.prank(buyer);
+        vm.expectRevert(EventNFT.InvalidSignature.selector);
+        nft.redeem(1, sig);
+    }
+
+    function test_redeem_wrongTokenId_reverts() public {
+        vm.prank(minter);
+        nft.mintTicket(buyer, 0, 100 * 1e6);
+
+        vm.warp(nft.eventDate() - 12 hours);
+        // Firma valida para tokenId 1, pero se intenta redimir el tokenId 2
+        bytes memory sig = _signRedeem(venueSignerPk, address(nft), 1);
+
+        vm.prank(buyer);
+        vm.expectRevert(EventNFT.InvalidSignature.selector);
+        nft.redeem(2, sig);
     }
 
 

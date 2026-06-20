@@ -38,6 +38,9 @@ interface IRewardsVault {
  *             tokenId como usado, bloquea futuras transferencias, dispara mutación
  *             de `tokenURI` (entrada → coleccionable) y notifica al `rewardsVault`
  *             (si está configurado) para acreditar la recompensa en VBK al fan.
+ *             `rewardsVault` puede venir ya seteado desde el constructor (si el
+ *             factory tiene uno configurado al momento de crear el evento) o
+ *             activarse/cambiarse después vía `setRewardsVault` (organizador).
  */
 contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownable {
     using Strings for uint256;
@@ -120,6 +123,7 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         uint16 royaltyBps;          // royalty al organizador (bps). Tope: 2000 = 20%.
         address venueSigner;
         string baseURI;
+        address rewardsVault;       // address(0) = sin recompensas activadas al nacer
     }
 
     // -----------------------------------------------------------------
@@ -145,6 +149,16 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         royaltyBps = p.royaltyBps;
         venueSigner = p.venueSigner;
         _baseTokenURI = p.baseURI;
+
+        // rewardsVault puede venir en address(0): el factory todavía no tiene
+        // uno configurado, o se decide activarlo después con setRewardsVault.
+        // No requiere validación de cero — address(0) es un valor válido aquí
+        // (significa "recompensas desactivadas"), a diferencia de organizer
+        // y venueSigner.
+        if (p.rewardsVault != address(0)) {
+            rewardsVault = p.rewardsVault;
+            emit RewardsVaultUpdated(address(0), p.rewardsVault);
+        }
 
         for (uint256 i = 0; i < tiers_.length; i++) {
             if (tiers_[i].supply == 0) revert InvalidTierSupply();
