@@ -12,6 +12,16 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
+ * @notice Interfaz mínima del módulo de recompensas. El EventNFT no maneja
+ *         USDC/VBK ni cotización: solo avisa que un fan asistió. El vault
+ *         decide cuánto VBK acreditar (valorizado en 0.10 USDC vía el pool)
+ *         y lo transfiere a la wallet del fan.
+ */
+interface IRewardsVault {
+    function notifyRedeem(address fan, uint256 tokenId) external;
+}
+
+/**
  * @title EventNFT
  * @notice ERC-721 de entradas para un evento específico.
  *         Un EventNFT por evento (deployado por EventFactory).
@@ -25,8 +35,9 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
  *             (NFTMarketplace) puede mover NFTs entre wallets. Mints y burns libres.
  *           - Tope de reventa por evento: `maxResalePriceBps` * `originalPrice[tokenId]`.
  *           - Check-in on-chain: `redeem()` con firma del `venueSigner`. Marca el
- *             tokenId como usado, bloquea futuras transferencias, y dispara mutación
- *             de `tokenURI` (entrada → coleccionable).
+ *             tokenId como usado, bloquea futuras transferencias, dispara mutación
+ *             de `tokenURI` (entrada → coleccionable) y notifica al `rewardsVault`
+ *             (si está configurado) para acreditar la recompensa en VBK al fan.
  */
 contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownable {
     using Strings for uint256;
@@ -55,7 +66,8 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     uint16  public immutable maxResalePriceBps; // tope reventa, ej. 12000 = 120%
     uint16  public immutable royaltyBps;        // royalty al organizador, ej. 500 = 5%
 
-    address public venueSigner;                 // firma off-chain los QRs en puerta
+    address public venueSigner;  // firma off-chain los QRs en puerta
+    address public rewardsVault; // acredita VBK al fan en cada redeem; address(0) = desactivado
     string  private _baseTokenURI;
 
     Tier[] public tiers;
@@ -80,6 +92,8 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     event TicketRefundBurned(uint256 indexed tokenId, uint256 indexed tierIdx);
     event Redeemed(uint256 indexed tokenId, address indexed by);
     event VenueSignerUpdated(address indexed previous, address indexed next);
+    event RewardsVaultUpdated(address indexed previous, address indexed next);
+    event RewardNotificationFailed(uint256 indexed tokenId, address indexed fan);
     event BaseURIUpdated(string newBaseURI);
 
     error TierOutOfRange();
@@ -163,6 +177,14 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         venueSigner = newSigner;
     }
 
+    /// @notice Configura (o desactiva con address(0)) el módulo de recompensas.
+    ///         Mientras esté en address(0), redeem() funciona igual que antes,
+    ///         sin acreditar VBK.
+    function setRewardsVault(address newVault) external onlyOwner {
+        emit RewardsVaultUpdated(rewardsVault, newVault);
+        rewardsVault = newVault;
+    }
+
     function setBaseURI(string calldata newBase) external onlyOwner {
         _baseTokenURI = newBase;
         emit BaseURIUpdated(newBase);
@@ -228,6 +250,11 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
      * @dev El mensaje firmado es `keccak256(abi.encode(address(this), tokenId, chainid))`.
      *      El venue firma off-chain, el fan presenta tokenId + signature.
      *      Ventana de check-in: desde 1 día antes hasta 1 día después del evento.
+     *      Si `rewardsVault` está configurado, se notifica al final para que
+     *      acredite la recompensa en VBK al fan que asistió. Un fallo del vault
+     *      (pool sin liquidez, vault pausado, etc.) NO revierte el check-in:
+     *      el fan ya entró; la recompensa se reintenta off-chain via el evento
+     *      `RewardNotificationFailed`.
      */
     function redeem(uint256 tokenId, bytes calldata signature) external {
         if (redeemed[tokenId]) revert AlreadyRedeemed();
@@ -241,6 +268,15 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         redeemed[tokenId] = true;
         attended[tokenId] = true;
         emit Redeemed(tokenId, msg.sender);
+
+        if (rewardsVault != address(0)) {
+            address fan = _ownerOf(tokenId);
+            try IRewardsVault(rewardsVault).notifyRedeem(fan, tokenId) {
+                // recompensa acreditada por el vault
+            } catch {
+                emit RewardNotificationFailed(tokenId, fan);
+            }
+        }
     }
 
     // -----------------------------------------------------------------
