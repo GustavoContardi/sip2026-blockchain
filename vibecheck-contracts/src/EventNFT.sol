@@ -32,15 +32,23 @@ interface IRewardsVault {
  *           - Royalty 5% al organizador vía EIP-2981 (lo respetan marketplaces externos
  *             que implementen el estándar; el marketplace interno SIEMPRE lo enforza).
  *           - Soulbound parcial: transferencias P2P bloqueadas; solo MARKET_ROLE
- *             (NFTMarketplace) puede mover NFTs entre wallets. Mints y burns libres.
+ *             (NFTMarketplace / CollectibleMarketplace) puede mover NFTs entre wallets.
+ *             Mints y burns libres.
  *           - Tope de reventa por evento: `maxResalePriceBps` * `originalPrice[tokenId]`.
+ *             Solo aplica en el marketplace pre-evento; CollectibleMarketplace
+ *             no enforza tope (mercado libre post-evento).
  *           - Check-in on-chain: `redeem()` con firma del `venueSigner`. Marca el
- *             tokenId como usado, bloquea futuras transferencias, dispara mutación
- *             de `tokenURI` (entrada → coleccionable) y notifica al `rewardsVault`
- *             (si está configurado) para acreditar la recompensa en VBK al fan.
- *             `rewardsVault` puede venir ya seteado desde el constructor (si el
- *             factory tiene uno configurado al momento de crear el evento) o
- *             activarse/cambiarse después vía `setRewardsVault` (organizador).
+ *             tokenId como usado, dispara mutación de `tokenURI` (entrada → coleccionable)
+ *             y notifica al `rewardsVault` (si está configurado) para acreditar la
+ *             recompensa en VBK al fan.
+ *           - Post-redeem: el NFT es transferible SOLO vía MARKET_ROLE
+ *             (CollectibleMarketplace). Las transferencias P2P directas siguen
+ *             bloqueadas para forzar el cobro de royalty y fee en el mercado.
+ *
+ * @dev CAMBIO v2 respecto a v1:
+ *      `_update` ahora permite que MARKET_ROLE transfiera tokens redeemed y/o
+ *      post-eventDate. La restricción `redeemed[tokenId]` y `block.timestamp >= eventDate`
+ *      aplica solo a transfers sin MARKET_ROLE. Esto habilita CollectibleMarketplace.
  */
 contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownable {
     using Strings for uint256;
@@ -48,15 +56,14 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     using MessageHashUtils for bytes32;
 
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
-    bytes32 public constant MARKET_ROLE = keccak256("MARKET_ROLE");
+    bytes32 public constant MARKET_ROLE  = keccak256("MARKET_ROLE");
 
-    /// @notice Definición de un tier de entradas. Sin tope de reventa propio:
-    ///         el tope se define a nivel de evento.
+    /// @notice Definición de un tier de entradas.
     struct Tier {
-        string name;                // "VIP", "Campo", "Platea", "Preventa"
-        uint256 priceUSDC;          // 6 decimales (USDC)
-        uint256 supply;             // máximo de tickets de este tier
-        uint256 sold;               // contador de vendidos
+        string  name;       // "VIP", "Campo", "Platea", "Preventa"
+        uint256 priceUSDC;  // 6 decimales (USDC)
+        uint256 supply;     // máximo de tickets de este tier
+        uint256 sold;       // contador de vendidos
     }
 
     // -----------------------------------------------------------------
@@ -82,7 +89,7 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     /// @notice Precio nominal en USDC pagado en la venta primaria.
     ///         Sirve como referencia para el tope de reventa.
     mapping(uint256 => uint256) public originalPrice;
-    /// @notice Si el token ya fue usado para entrar al evento.
+    /// @notice Si el token ya fue usado para entrar al evento (check-in).
     mapping(uint256 => bool) public redeemed;
     /// @notice Si el holder asistió (controla la mutación del tokenURI).
     mapping(uint256 => bool) public attended;
@@ -115,14 +122,14 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
 
     /// @notice Parámetros agrupados para evitar stack too deep en el constructor.
     struct InitParams {
-        string name;
-        string symbol;
+        string  name;
+        string  symbol;
         address organizer;
         uint256 eventDate;
-        uint16 maxResalePriceBps;   // tope de reventa (bps). 10000=100%, 12000=120%, etc.
-        uint16 royaltyBps;          // royalty al organizador (bps). Tope: 2000 = 20%.
+        uint16  maxResalePriceBps;  // tope de reventa (bps). 10000=100%, 12000=120%, etc.
+        uint16  royaltyBps;         // royalty al organizador (bps). Tope: 2000 = 20%.
         address venueSigner;
-        string baseURI;
+        string  baseURI;
         address rewardsVault;       // address(0) = sin recompensas activadas al nacer
     }
 
@@ -137,24 +144,17 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         if (p.organizer == address(0) || p.venueSigner == address(0)) revert ZeroAddress();
         if (p.eventDate <= block.timestamp) revert EventDateInPast();
         if (tiers_.length == 0) revert EmptyTiers();
-        // Tope reventa: mínimo 100% (10000), máximo 1000% (100000) como sanity check.
         if (p.maxResalePriceBps < 10_000 || p.maxResalePriceBps > 50_000) revert InvalidResaleCap();
-        // Royalty máximo 20% (2000 bps), patrón conservador de OpenZeppelin.
         if (p.royaltyBps > 2_000) revert InvalidRoyalty();
 
-        organizer = p.organizer;
-        factory = msg.sender;
-        eventDate = p.eventDate;
+        organizer    = p.organizer;
+        factory      = msg.sender;
+        eventDate    = p.eventDate;
         maxResalePriceBps = p.maxResalePriceBps;
-        royaltyBps = p.royaltyBps;
-        venueSigner = p.venueSigner;
+        royaltyBps   = p.royaltyBps;
+        venueSigner  = p.venueSigner;
         _baseTokenURI = p.baseURI;
 
-        // rewardsVault puede venir en address(0): el factory todavía no tiene
-        // uno configurado, o se decide activarlo después con setRewardsVault.
-        // No requiere validación de cero — address(0) es un valor válido aquí
-        // (significa "recompensas desactivadas"), a diferencia de organizer
-        // y venueSigner.
         if (p.rewardsVault != address(0)) {
             rewardsVault = p.rewardsVault;
             emit RewardsVaultUpdated(address(0), p.rewardsVault);
@@ -162,19 +162,16 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
 
         for (uint256 i = 0; i < tiers_.length; i++) {
             if (tiers_[i].supply == 0) revert InvalidTierSupply();
-            // `sold` se inicializa en 0 sin importar lo que mande el factory.
             tiers.push(Tier({
-                name: tiers_[i].name,
+                name:      tiers_[i].name,
                 priceUSDC: tiers_[i].priceUSDC,
-                supply: tiers_[i].supply,
-                sold: 0
+                supply:    tiers_[i].supply,
+                sold:      0
             }));
         }
 
-        // Royalty al organizador vía EIP-2981 (configurable por evento).
         _setDefaultRoyalty(p.organizer, p.royaltyBps);
 
-        // Factory (deployer) y organizer son admins de roles del NFT.
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(DEFAULT_ADMIN_ROLE, p.organizer);
 
@@ -191,9 +188,6 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         venueSigner = newSigner;
     }
 
-    /// @notice Configura (o desactiva con address(0)) el módulo de recompensas.
-    ///         Mientras esté en address(0), redeem() funciona igual que antes,
-    ///         sin acreditar VBK.
     function setRewardsVault(address newVault) external onlyOwner {
         emit RewardsVaultUpdated(rewardsVault, newVault);
         rewardsVault = newVault;
@@ -216,10 +210,6 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     // Minting (solo OfferingNFT)
     // -----------------------------------------------------------------
 
-    /// @notice Acuña un ticket en la venta primaria. Solo el OfferingNFT.
-    /// @param to       comprador
-    /// @param tierIdx  índice del tier elegido
-    /// @param paidUSDC precio nominal en USDC del tier (referencia para tope de reventa)
     function mintTicket(address to, uint256 tierIdx, uint256 paidUSDC)
         external
         onlyRole(MINTER_ROLE)
@@ -234,20 +224,13 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
         t.sold += 1;
 
         tokenId = ++_nextId;
-        tokenTier[tokenId] = tierIdx;
+        tokenTier[tokenId]    = tierIdx;
         originalPrice[tokenId] = paidUSDC;
 
         _mint(to, tokenId);
         emit TicketSold(to, tokenId, tierIdx, paidUSDC);
     }
 
-    /// @notice Quema un ticket en un reembolso y libera el cupo del tier.
-    ///         Solo el OfferingNFT (MINTER_ROLE), que coordina el reembolso y
-    ///         libera el escrow en la misma transacción. El `_burn` revierte si
-    ///         el token no existe, lo que impide quemar dos veces.
-    /// @dev El hook soulbound `_update` permite el burn (to == address(0)); no
-    ///      hace falta tocarlo. Si el contrato está pausado, `_burn` revierte
-    ///      por `ERC721Pausable`.
     function refundBurn(uint256 tokenId) external onlyRole(MINTER_ROLE) {
         uint256 tierIdx = tokenTier[tokenId];
         _burn(tokenId);
@@ -262,31 +245,26 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     /**
      * @notice Marca un ticket como usado. Requiere firma del venueSigner.
      * @dev El mensaje firmado es `keccak256(abi.encode(address(this), tokenId, chainid))`.
-     *      El venue firma off-chain, el fan presenta tokenId + signature.
      *      Ventana de check-in: desde 1 día antes hasta 1 día después del evento.
-     *      Si `rewardsVault` está configurado, se notifica al final para que
-     *      acredite la recompensa en VBK al fan que asistió. Un fallo del vault
-     *      (pool sin liquidez, vault pausado, etc.) NO revierte el check-in:
-     *      el fan ya entró; la recompensa se reintenta off-chain via el evento
-     *      `RewardNotificationFailed`.
+     *      Si `rewardsVault` está configurado, notifica al vault para acreditar VBK.
+     *      Un fallo del vault NO revierte el check-in.
      */
     function redeem(uint256 tokenId, bytes calldata signature) external {
         if (redeemed[tokenId]) revert AlreadyRedeemed();
-
 
         bytes32 digest = keccak256(abi.encode(address(this), tokenId, block.chainid))
             .toEthSignedMessageHash();
         address recovered = digest.recover(signature);
         if (recovered != venueSigner) revert InvalidSignature();
 
-        redeemed[tokenId] = true;
-        attended[tokenId] = true;
+        redeemed[tokenId]  = true;
+        attended[tokenId]  = true;
         emit Redeemed(tokenId, msg.sender);
 
         if (rewardsVault != address(0)) {
             address fan = _ownerOf(tokenId);
             try IRewardsVault(rewardsVault).notifyRedeem(fan, tokenId) {
-                // recompensa acreditada por el vault
+                // recompensa acreditada
             } catch {
                 emit RewardNotificationFailed(tokenId, fan);
             }
@@ -297,17 +275,14 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
     // Helpers de lectura
     // -----------------------------------------------------------------
 
-    /// @notice Precio máximo al que se puede revender este token (en USDC).
     function maxResalePrice(uint256 tokenId) external view returns (uint256) {
         return (originalPrice[tokenId] * maxResalePriceBps) / 10_000;
     }
 
-    /// @notice Cuántos tiers tiene este evento.
     function tiersLength() external view returns (uint256) {
         return tiers.length;
     }
 
-    /// @notice Total acuñado hasta ahora.
     function totalMinted() external view returns (uint256) {
         return _nextId;
     }
@@ -334,18 +309,35 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
 
     /**
      * @dev Reglas de transferencia:
-     *      - Mint (from == 0) y burn (to == 0): permitidos.
-     *      - Post-redeem: nadie puede transferir (entrada usada).
-     *      - Post-eventDate: nadie puede transferir (evento pasó).
-     *      - Pre-evento: solo el organizador o quien tenga MARKET_ROLE puede mover.
-     *        Esto fuerza que toda reventa pase por el NFTMarketplace, donde se
-     *        cobra royalty y se enforza el tope de precio.
      *
-     *      `auth` es el operator de la transferencia. Lo provee OZ v5:
-     *      - Si el owner llama directamente `transferFrom`, `auth == owner`.
-     *      - Si llama un approved/operator, `auth == ese operator`.
-     *      Por eso, un fan que llame `transferFrom` directo a otra wallet falla
-     *      (porque su address no tiene MARKET_ROLE), pero el marketplace pasa.
+     *      Mint (from == 0) y burn (to == 0): siempre permitidos.
+     *
+     *      Para transferencias reales (from != 0 && to != 0):
+     *
+     *      1. Si `auth` tiene MARKET_ROLE:
+     *         - Permitido en cualquier estado (pre/post-evento, redeemed o no).
+     *         - CollectibleMarketplace usa esta ruta para mover coleccionables.
+     *         - NFTMarketplace usa esta ruta para reventa pre-evento.
+     *
+     *      2. Si `auth` NO tiene MARKET_ROLE:
+     *         - Bloqueado si el token fue redeemed.
+     *         - Bloqueado si el evento ya pasó.
+     *         - Bloqueado si auth no es el organizador.
+     *         (Igual que v1, sin cambios para el caso no-market.)
+     *
+     *      Diseño de seguridad del bypass MARKET_ROLE:
+     *      - NFTMarketplace rechaza listar tokens redeemed → no puede revender
+     *        entradas ya usadas como si fueran válidas.
+     *      - CollectibleMarketplace exige redeemed == true para listar → no
+     *        puede mover entradas pre-uso.
+     *      - El enforcement está en el contrato del marketplace, no en _update.
+     *        Cada marketplace controla qué tokens acepta; _update solo controla
+     *        quién puede ejecutar el transfer físico.
+     *
+     *      `auth` en OZ v5:
+     *      - Owner llama transferFrom directo → auth == owner.
+     *      - Approved/operator llama → auth == ese operator.
+     *      - Mint/burn internos → auth == address(0) (caso from/to == 0, ya excluido arriba).
      */
     function _update(address to, uint256 tokenId, address auth)
         internal
@@ -356,16 +348,37 @@ contract EventNFT is ERC721, ERC721Pausable, ERC721Royalty, AccessControl, Ownab
 
         // Transferencia real (no mint ni burn).
         if (from != address(0) && to != address(0)) {
-            if (redeemed[tokenId]) revert TransferNotAllowed();
-            if (block.timestamp >= eventDate) revert TransferNotAllowed();
 
-            // Solo el organizador o un operator con MARKET_ROLE puede transferir.
-            bool authorized =
-                auth == organizer ||
+            // Determinar si el operador tiene MARKET_ROLE.
+            // auth == address(0) ocurre en transfers internos donde OZ no
+            // pasa un operator explícito; en ese caso miramos `from`.
+            bool isMarket =
                 hasRole(MARKET_ROLE, auth) ||
-                (auth == address(0) && (from == organizer || hasRole(MARKET_ROLE, from)));
+                (auth == address(0) && hasRole(MARKET_ROLE, from));
 
-            if (!authorized) revert TransferNotAllowed();
+            if (isMarket) {
+                // MARKET_ROLE: sin restricciones de estado ni fecha.
+                // El marketplace que llama es responsable de validar
+                // el estado del token antes de ejecutar el transfer.
+                // Caemos directo al super._update sin checks adicionales.
+            } else {
+                // Sin MARKET_ROLE: aplican todas las restricciones originales.
+
+                // Tokens redeemed no se pueden transferir P2P.
+                if (redeemed[tokenId]) revert TransferNotAllowed();
+
+                // Después del evento no se pueden transferir P2P.
+                if (block.timestamp >= eventDate) revert TransferNotAllowed();
+
+                // Solo el organizador puede hacer transfers directos
+                // (p.ej. distribución inicial desde el OfferingNFT ya
+                //  maneja los mints; esto cubre edge cases del organizador).
+                bool authorized =
+                    auth == organizer ||
+                    (auth == address(0) && from == organizer);
+
+                if (!authorized) revert TransferNotAllowed();
+            }
         }
 
         return super._update(to, tokenId, auth);

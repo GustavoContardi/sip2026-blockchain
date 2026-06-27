@@ -32,6 +32,7 @@ contract EventFactory {
 
     address public offering;
     address public marketplace;
+    address public collectibleMarketplace;
 
     /// @notice RewardsVault vigente. Se inyecta en cada EventNFT nuevo al
     ///         momento de lanzarlo. address(0) = recompensas no configuradas
@@ -47,6 +48,7 @@ contract EventFactory {
 
     event OfferingSet(address indexed offering);
     event MarketplaceSet(address indexed marketplace);
+    event CollectibleMarketplaceSet(address indexed collectibleMarketplace);
     event RewardsVaultSet(address indexed previous, address indexed next);
     event EventLaunched(
         address indexed organizer,
@@ -98,6 +100,19 @@ contract EventFactory {
         if (marketplace != address(0)) revert AlreadySet();
         marketplace = marketplace_;
         emit MarketplaceSet(marketplace_);
+    }
+
+    /// @notice Registra el CollectibleMarketplace (post-evento). One-shot.
+    ///         Sin este paso, los EventNFTs nuevos no recibirán MARKET_ROLE
+    ///         para el mercado de coleccionables y los listings revertirán.
+    ///         Si se llama launchEvent antes de setear esto, el EventNFT
+    ///         nace sin ese rol — se puede otorgar manualmente después
+    ///         via EventNFT.grantRole(MARKET_ROLE, collectibleMarketplace).
+    function setCollectibleMarketplace(address collectibleMarketplace_) external onlyAdmin {
+        if (collectibleMarketplace_ == address(0)) revert ZeroAddress();
+        if (collectibleMarketplace != address(0)) revert AlreadySet();
+        collectibleMarketplace = collectibleMarketplace_;
+        emit CollectibleMarketplaceSet(collectibleMarketplace_);
     }
 
     /// @notice Configura (o desactiva con address(0)) el RewardsVault que se
@@ -152,6 +167,13 @@ contract EventFactory {
 
         nft.grantRole(nft.MINTER_ROLE(), offering);
         nft.grantRole(nft.MARKET_ROLE(), marketplace);
+
+        // CollectibleMarketplace: se otorga solo si ya está configurado.
+        // Si se llama launchEvent antes de setCollectibleMarketplace, el
+        // EventNFT nace sin ese rol. Se puede otorgar manualmente después.
+        if (collectibleMarketplace != address(0)) {
+            nft.grantRole(nft.MARKET_ROLE(), collectibleMarketplace);
+        }
 
         address nftAddr = address(nft);
         events.push(nftAddr);
